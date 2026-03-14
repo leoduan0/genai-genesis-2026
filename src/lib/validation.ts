@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod"
 
 export const symptomOptions = [
   "Anxiety",
@@ -9,7 +9,7 @@ export const symptomOptions = [
   "Difficulty concentrating",
   "Substance use",
   "Self-harm thoughts",
-] as const;
+] as const
 
 export const intakeSchema = z.object({
   fullName: z.string().min(2, "Please provide a name"),
@@ -19,6 +19,6 @@ export const intakeSchema = z.object({
   symptoms: z
     .array(z.enum(symptomOptions))
     .min(1, "Select at least one symptom"),
-});
+})
 
-export type IntakeFormValues = z.infer<typeof intakeSchema>;
+export type IntakeFormValues = z.infer<typeof intakeSchema>
