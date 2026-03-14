@@ -6,3 +6,268 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum DimensionLevel {
+  SPECTRUM
+  CONDITION
+}
+
+enum SourceQuality {
+  META_ANALYSIS
+  LARGE_STUDY
+  SMALL_STUDY
+  DERIVED
+  ESTIMATED
+}
+
+enum PopulationType {
+  GENERAL
+  CLINICAL
+  COLLEGE
+  PRIMARY_CARE
+}
+
+enum InstrumentTier {
+  BROAD_SCREENING
+  TARGETED
+}
+
+enum DerivationMethod {
+  DIRECT
+  CHAINED
+  ESTIMATED
+}
+
+enum OverlapStrength {
+  HIGH
+  MODERATE
+  LOW
+}
+
+enum ContentTag {
+  SLEEP
+  APPETITE
+  WEIGHT
+  FATIGUE
+  CONCENTRATION
+  PSYCHOMOTOR
+  ANHEDONIA
+  DEPRESSED_MOOD
+  WORTHLESSNESS
+  SUICIDALITY
+  WORRY
+  RESTLESSNESS
+  IRRITABILITY
+  MUSCLE_TENSION
+  PANIC
+  AVOIDANCE
+  HYPERAROUSAL
+  INTRUSIONS
+  NUMBING
+  DISSOCIATION
+  FLASHBACKS
+  SOMATIC_PAIN
+  SOMATIC_GI
+  SOMATIC_CARDIO
+  SOMATIC_NEURO
+  ALCOHOL_USE
+  DRUG_USE
+  GAMBLING
+  IMPULSIVITY
+  AGGRESSION
+  RULE_BREAKING
+  GRANDIOSITY
+  MANIPULATIVENESS
+  CALLOUSNESS
+  HALLUCINATIONS
+  DELUSIONS
+  PARANOIA
+  DISORGANIZED_THOUGHT
+  MANIA
+  HYPOMANIA
+  SOCIAL_WITHDRAWAL
+  EMOTIONAL_DETACHMENT
+  DEPERSONALIZATION
+  DEREALIZATION
+  OBSESSIONS
+  COMPULSIONS
+  HOARDING
+  BODY_IMAGE
+  RESTRICTED_EATING
+  BINGE_EATING
+  TICS
+  PERFECTIONISM
+  RIGIDITY
+  SENSORY_SENSITIVITY
+  INATTENTION
+  HYPERACTIVITY
+  MAGICAL_THINKING
+  ECCENTRIC_BEHAVIOR
+  HEALTH_ANXIETY
+  PURGING
+  RISK_TAKING
+  TALKATIVENESS
+  EMOTIONAL_LABILITY
+  HOSTILITY
+  IRRESPONSIBILITY
+  WITHDRAWAL
+}
+
+// ─── Psychometric Reference Data (Static) ────────────────────────────────────
+
+model Dimension {
+  id          String         @id @default(cuid())
+  name        String
+  shortCode   String         @unique
+  level       DimensionLevel
+  parentId    String?
+  description String?
+  sortOrder   Int
+
+  parent   Dimension?  @relation("DimensionHierarchy", fields: [parentId], references: [id])
+  children Dimension[] @relation("DimensionHierarchy")
+
+  correlationsA             DimensionCorrelation[]     @relation("CorrelationDimA")
+  correlationsB             DimensionCorrelation[]     @relation("CorrelationDimB")
+  conditionLoadings         ConditionSpectrumLoading[] @relation("LoadingCondition")
+  spectrumLoadings          ConditionSpectrumLoading[] @relation("LoadingSpectrum")
+  baseRates                 BaseRate[]
+  clinicalThresholds        ClinicalThreshold[]
+  itemLoadings              ItemLoading[]
+
+  @@index([level])
+}
+
+model DimensionCorrelation {
+  id            String        @id @default(cuid())
+  dimensionAId  String
+  dimensionBId  String
+  correlation   Float
+  sourceQuality SourceQuality
+  sources       Json
+  notes         String?
+
+  dimensionA Dimension @relation("CorrelationDimA", fields: [dimensionAId], references: [id])
+  dimensionB Dimension @relation("CorrelationDimB", fields: [dimensionBId], references: [id])
+
+  @@unique([dimensionAId, dimensionBId])
+}
+
+model ConditionSpectrumLoading {
+  id            String        @id @default(cuid())
+  conditionId   String
+  spectrumId    String
+  loading       Float
+  isPrimary     Boolean
+  sourceQuality SourceQuality
+  sources       Json
+  notes         String?
+
+  condition Dimension @relation("LoadingCondition", fields: [conditionId], references: [id])
+  spectrum  Dimension @relation("LoadingSpectrum", fields: [spectrumId], references: [id])
+
+  @@unique([conditionId, spectrumId])
+}
+
+model BaseRate {
+  id             String         @id @default(cuid())
+  dimensionId    String
+  populationType PopulationType
+  prevalence     Float
+  liabilityMean  Float
+  sourceQuality  SourceQuality
+  sources        Json
+  notes          String?
+
+  dimension Dimension @relation(fields: [dimensionId], references: [id])
+
+  @@unique([dimensionId, populationType])
+}
+
+model Instrument {
+  id                  String         @id @default(cuid())
+  name                String         @unique
+  fullName            String
+  tier                InstrumentTier
+  itemCount           Int
+  responseScale       Json
+  scaleReliabilityIcc Float?
+  retestIntervalDays  Int?
+  citation            String
+
+  items Item[]
+}
+
+model Item {
+  id                    String        @id @default(cuid())
+  instrumentId          String
+  itemNumber            Int
+  text                  String
+  responseMin           Int
+  responseMax           Int
+  responseLabels        Json
+  isReverseCoded        Boolean       @default(false)
+  testRetestR           Float?
+  noiseVariance         Float         @default(0.5)
+  noiseInflationFactor  Float         @default(1.5)
+  sourceQuality         SourceQuality @default(ESTIMATED)
+  tags                  ContentTag[]
+
+  instrument       Instrument        @relation(fields: [instrumentId], references: [id])
+  loadings         ItemLoading[]
+  overlapsA        ItemOverlap[]     @relation("OverlapItemA")
+  overlapsB        ItemOverlap[]     @relation("OverlapItemB")
+
+  @@unique([instrumentId, itemNumber])
+}
+
+model ItemLoading {
+  id                          String           @id @default(cuid())
+  itemId                      String
+  dimensionId                 String
+  loading                     Float
+  isPrimary                   Boolean
+  derivationMethod            DerivationMethod
+  withinInstrumentLoading     Float?
+  instrumentToDimensionLoading Float?
+  sourceQuality               SourceQuality
+  sources                     Json
+  notes                       String?
+
+  item      Item      @relation(fields: [itemId], references: [id])
+  dimension Dimension @relation(fields: [dimensionId], references: [id])
+
+  @@unique([itemId, dimensionId])
+}
+
+model ItemOverlap {
+  id                        String          @id @default(cuid())
+  itemAId                   String
+  itemBId                   String
+  overlapStrength           OverlapStrength
+  sharedTags                ContentTag[]
+  description               String
+  noiseInflationMultiplier  Float
+
+  itemA Item @relation("OverlapItemA", fields: [itemAId], references: [id])
+  itemB Item @relation("OverlapItemB", fields: [itemBId], references: [id])
+
+  @@unique([itemAId, itemBId])
+}
+
+model ClinicalThreshold {
+  id                 String  @id @default(cuid())
+  dimensionId        String
+  thresholdLiability Float
+  sensitivity        Float
+  specificity        Float
+  sourceInstrument   String?
+  sourceCutoff       String?
+  sources            Json
+  notes              String?
+
+  dimension Dimension @relation(fields: [dimensionId], references: [id])
+}
+
