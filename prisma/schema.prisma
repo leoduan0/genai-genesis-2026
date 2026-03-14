@@ -1,6 +1,6 @@
 generator client {
   provider = "prisma-client"
-  output   = "../generated/prisma"
+  output   = "../src/generated/prisma"
 }
 
 datasource db {
@@ -271,3 +271,104 @@ model ClinicalThreshold {
   dimension Dimension @relation(fields: [dimensionId], references: [id])
 }
 
+
+enum ROLES {
+  DOCTOR
+  PATIENT
+}
+
+model User {
+  id        String @id
+  email     String
+  firstName String @map("first_name")
+  lastName  String @map("last_name")
+  role      ROLES
+
+  doctor  Doctor?
+  patient Patient?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("user")
+}
+
+model Doctor {
+  id       String    @id @default(uuid())
+  patients Patient[]
+
+  user   User   @relation(fields: [userId], references: [id])
+  userId String @unique @map("user_id")
+
+  @@map("doctor")
+}
+
+enum GENDER {
+  MALE
+  FEMALE
+  OTHER
+}
+
+model Patient {
+  id String @id @default(uuid())
+
+  age             Int
+  gender          GENDER
+  doctorId        String?          @map("doctor_id")
+  doctor          Doctor?          @relation(fields: [doctorId], references: [id])
+  chatSessions    ChatSession[]
+  therapySessions TherapySession[]
+
+  user   User   @relation(fields: [userId], references: [id])
+  userId String @unique @map("user_id")
+
+  @@map("patient")
+}
+
+model ChatSession {
+  id        String        @id @default(uuid())
+  patientId String        @map("patient_id")
+  doctorId  String?       @map("doctor_id")
+  status    String        @default("open")
+  createdAt DateTime      @default(now()) @map("created_at")
+  endedAt   DateTime?     @map("ended_at")
+  patient   Patient       @relation(fields: [patientId], references: [id])
+  messages  ChatMessage[]
+
+  @@map("chat_session")
+}
+
+model ChatMessage {
+  id        String      @id @default(uuid())
+  sessionId String      @map("session_id")
+  role      String
+  content   String
+  createdAt DateTime    @default(now()) @map("created_at")
+  session   ChatSession @relation(fields: [sessionId], references: [id])
+
+  @@map("chat_message")
+}
+
+model TherapySession {
+  id         String           @id @default(uuid())
+  patientId  String           @map("patient_id")
+  doctorId   String?          @map("doctor_id")
+  title      String?
+  transcript String?
+  summary    String?
+  createdAt  DateTime         @default(now()) @map("created_at")
+  patient    Patient          @relation(fields: [patientId], references: [id])
+  messages   TherapyMessage[]
+
+  @@map("therapy_session")
+}
+
+model TherapyMessage {
+  id        String         @id @default(uuid())
+  sessionId String         @map("session_id")
+  role      String
+  content   String
+  createdAt DateTime       @default(now()) @map("created_at")
+  session   TherapySession @relation(fields: [sessionId], references: [id])
+
+  @@map("therapy_message")
+}
