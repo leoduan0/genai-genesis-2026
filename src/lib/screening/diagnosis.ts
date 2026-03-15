@@ -7,6 +7,8 @@ import type {
   DiagnosticProfile,
   TerminationCheck,
   RankedItem,
+  SpectrumResult,
+  SpectrumMagnitude,
 } from "./types";
 import { rankItems } from "./selection";
 
@@ -71,7 +73,7 @@ export function classifyCondition(
   if (probability < c.ruledOutProbability && uncertainty < c.ruledOutMaxUncertainty) {
     return "ruled_out";
   }
-  if (probability > c.flaggedProbability) {
+  if (probability > c.flaggedProbability && uncertainty < c.flaggedMaxUncertainty) {
     return "flagged";
   }
   return "uncertain";
@@ -138,13 +140,12 @@ export function checkStageTwoTermination(
     return { shouldTerminate: true, reason: "all_conditions_resolved" };
   }
 
-  // Criterion 2: marginal info gain too small
-  const maxVar = Math.max(...state.conditionVariances);
+  // Criterion 2: best item's expected probability change too small
   const ranked = rankItems(state, refData, config);
 
   if (ranked.length > 0) {
-    const bestReduction = ranked[0].expectedVarianceReduction;
-    if (bestReduction < config.stageTwoMinVarianceReduction * maxVar) {
+    const bestScore = ranked[0].expectedVarianceReduction;
+    if (bestScore < config.stageTwoMinExpectedProbChange) {
       return { shouldTerminate: true, reason: "marginal_info_gain" };
     }
   } else {
@@ -154,12 +155,55 @@ export function checkStageTwoTermination(
   return { shouldTerminate: false, reason: "" };
 }
 
+// ─── Spectrum Magnitude ──────────────────────────────────────────────────────
+
+/**
+ * Map a spectrum posterior mean (liability scale, z-score) to a human label.
+ */
+export function spectrumMagnitude(mean: number): SpectrumMagnitude {
+  if (mean > 0.75) return "very_high";
+  if (mean > 0.25) return "high";
+  if (mean > -0.25) return "moderate";
+  return "low";
+}
+
 // ─── Diagnostic Profile ───────────────────────────────────────────────────────
 
 /**
+ * Compute a condition result from spectrum-derived estimates (else-branch).
+ * For spectrum-derived estimates the uncertainty gate is relaxed: conditions
+ * with probability above the flagged threshold are classified "flagged" even
+ * when the uncertainty is high, because the uncertainty is structural (the
+ * condition was never directly assessed) rather than due to lack of data.
+ */
+function classifyConditionSpectrumDerived(
+  probability: number,
+  uncertainty: number,
+  config: ScreeningConfig,
+): ConditionClassification {
+  const c = config.classification;
+
+  // "Likely" still requires low uncertainty — spectrum-derived estimates
+  // don't have enough precision for strong conclusions
+  if (probability > c.likelyProbability && uncertainty < c.likelyMaxUncertainty) {
+    return "likely";
+  }
+  // Ruling out is safe with high uncertainty if probability is very low
+  if (probability < c.ruledOutProbability) {
+    return "ruled_out";
+  }
+  // Relax uncertainty gate: flag if probability warrants it, even with
+  // high structural uncertainty from the spectrum→condition projection
+  if (probability > c.flaggedProbability) {
+    return "flagged";
+  }
+  return "uncertain";
+}
+
+/**
  * Generate the full diagnostic profile from the current state.
- * Computes probabilities and classifications for all conditions under
- * flagged spectra, and identifies spectra that were not assessed.
+ * Computes probabilities and classifications for all conditions,
+ * builds spectrum-level summaries, and identifies what wasn't assessed.
  */
 export function generateDiagnosticProfile(
   state: ScreeningState,
@@ -170,8 +214,11 @@ export function generateDiagnosticProfile(
   const unflagged: ConditionResult[] = [];
   const assessedSpectra = new Set(state.flaggedSpectra);
 
+  // Build a map of conditionId → ConditionResult for spectrum grouping
+  const conditionResultMap = new Map<string, ConditionResult>();
+
   if (state.conditionMean && state.conditionVariances && state.conditionDimensionOrder) {
-    // Stage 2 was reached — use condition-level posteriors
+    // Stage 2 was reached — use condition-level posteriors for assessed conditions
     for (let i = 0; i < state.conditionDimensionOrder.length; i++) {
       const condId = state.conditionDimensionOrder[i];
       const condition = refData.conditions.find((c) => c.id === condId);
@@ -199,49 +246,31 @@ export function generateDiagnosticProfile(
         wasAssessed: true,
       };
 
+      conditionResultMap.set(condId, result);
       if (classification === "likely" || classification === "flagged") {
         flagged.push(result);
       } else {
         unflagged.push(result);
       }
     }
-  } else {
-    // Screening ended before stage 2 — derive condition estimates from spectra
+
+    // Also derive estimates for conditions NOT in conditionDimensionOrder
+    // (conditions under unflagged spectra that weren't directly assessed)
+    const assessedCondIds = new Set(state.conditionDimensionOrder);
     for (const condition of refData.conditions) {
-      const specIdx = refData.spectrumIndex.get(condition.parentId);
-      if (specIdx === undefined) continue;
-
-      const loadingRef = refData.conditionSpectrumLoadings.find(
-        (l) => l.conditionId === condition.id && l.isPrimary,
-      );
-      const lambda = loadingRef?.loading ?? 0;
-
-      const baseRate = refData.baseRates.find((br) => br.dimensionId === condition.id);
-      const baseMean = baseRate?.liabilityMean ?? 0;
-
-      const mu = baseMean + lambda * state.spectrumMean[specIdx];
-      const variance =
-        lambda * lambda * state.spectrumCovariance[specIdx][specIdx] + (1 - lambda * lambda);
-
-      const threshold = refData.thresholdByCondition.get(condition.id);
-      if (!threshold) continue;
-
-      const prob = computeProbability(mu, variance, threshold.thresholdLiability);
-      const unc = Math.sqrt(variance);
-      const classification = classifyCondition(prob, unc, config);
-
-      const result: ConditionResult = {
-        conditionId: condition.id,
-        name: condition.name,
-        shortCode: condition.shortCode,
-        probability: prob,
-        uncertainty: unc,
-        classification,
-        spectrumId: condition.parentId,
-        wasAssessed: false,
-      };
-
-      if (classification === "likely" || classification === "flagged") {
+      if (assessedCondIds.has(condition.id)) continue;
+      const result = deriveConditionFromSpectrum(condition, state, refData, config);
+      if (!result) continue;
+      conditionResultMap.set(condition.id, result);
+      unflagged.push(result);
+    }
+  } else {
+    // Screening ended before stage 2 — derive all condition estimates from spectra
+    for (const condition of refData.conditions) {
+      const result = deriveConditionFromSpectrum(condition, state, refData, config);
+      if (!result) continue;
+      conditionResultMap.set(condition.id, result);
+      if (result.classification === "likely" || result.classification === "flagged") {
         flagged.push(result);
       } else {
         unflagged.push(result);
@@ -253,16 +282,85 @@ export function generateDiagnosticProfile(
   flagged.sort((a, b) => b.probability - a.probability);
   unflagged.sort((a, b) => b.probability - a.probability);
 
-  // Identify not-assessed spectra
+  // Build spectrum-level results
+  const spectrumResults: SpectrumResult[] = refData.spectra.map((spectrum, i) => {
+    const posteriorMean = state.spectrumMean[i];
+    const posteriorVariance = state.spectrumCovariance[i][i];
+    const wasAssessed = state.itemsAdministered.length > 0; // stage 1 explores all spectra
+
+    // Gather condition results under this spectrum
+    const specConditions = refData.conditions
+      .filter((c) => c.parentId === spectrum.id)
+      .map((c) => conditionResultMap.get(c.id))
+      .filter((r): r is ConditionResult => r !== undefined);
+
+    return {
+      spectrumId: spectrum.id,
+      name: spectrum.name,
+      shortCode: spectrum.shortCode,
+      posteriorMean,
+      posteriorVariance,
+      magnitude: spectrumMagnitude(posteriorMean),
+      wasAssessed,
+      conditions: specConditions,
+    };
+  });
+
+  // Not-assessed spectra: only those that had zero items loading on them
+  // (in practice, stage 1 explores all spectra, so this is usually empty)
   const notAssessed = refData.spectra
-    .filter((s) => !assessedSpectra.has(s.id))
+    .filter((s) => !assessedSpectra.has(s.id) && state.itemsAdministered.length === 0)
     .map((s) => ({ spectrumId: s.id, name: s.name, shortCode: s.shortCode }));
 
   return {
     flagged,
     unflagged,
+    spectrumResults,
     notAssessed,
     totalItemsAdministered: state.itemsAdministered.length,
     totalAutoScored: state.autoScoredItems.length,
+  };
+}
+
+/** Derive a condition estimate from its parent spectrum posterior. */
+function deriveConditionFromSpectrum(
+  condition: { id: string; name: string; shortCode: string; parentId: string },
+  state: ScreeningState,
+  refData: ReferenceData,
+  config: ScreeningConfig,
+): ConditionResult | null {
+  const specIdx = refData.spectrumIndex.get(condition.parentId);
+  if (specIdx === undefined) return null;
+
+  const loadingRef = refData.conditionSpectrumLoadings.find(
+    (l) => l.conditionId === condition.id && l.isPrimary,
+  );
+  const lambda = loadingRef?.loading ?? 0;
+
+  const baseRate = refData.baseRates.find((br) => br.dimensionId === condition.id);
+  const baseMean = baseRate?.liabilityMean ?? 0;
+
+  const threshold = refData.thresholdByCondition.get(condition.id);
+  if (!threshold) return null;
+
+  // Calibrate: μ₀ = τ + Φ⁻¹(prevalence) so that P(z > τ | prior) = prevalence
+  const calibratedPriorMean = baseMean + threshold.thresholdLiability;
+  const mu = calibratedPriorMean + lambda * state.spectrumMean[specIdx];
+  const variance =
+    lambda * lambda * state.spectrumCovariance[specIdx][specIdx] + (1 - lambda * lambda);
+
+  const prob = computeProbability(mu, variance, threshold.thresholdLiability);
+  const unc = Math.sqrt(variance);
+  const classification = classifyConditionSpectrumDerived(prob, unc, config);
+
+  return {
+    conditionId: condition.id,
+    name: condition.name,
+    shortCode: condition.shortCode,
+    probability: prob,
+    uncertainty: unc,
+    classification,
+    spectrumId: condition.parentId,
+    wasAssessed: false,
   };
 }

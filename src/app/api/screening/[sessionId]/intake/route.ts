@@ -71,7 +71,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           if (item) {
             impliedScores.push({
               itemId: s.itemId,
-              normalizedResponse: normalizeResponse(s.score, item.responseMin, item.responseMax),
+              normalizedResponse: normalizeResponse(s.score, item.responseMin, item.responseMax, item.normativeMean, item.normativeSD, item.normativeResponseDist, item.isReverseCoded),
             });
           }
         }

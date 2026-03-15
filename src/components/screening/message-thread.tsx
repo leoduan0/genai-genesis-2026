@@ -32,12 +32,14 @@ interface MessageThreadProps {
   messages: ChatMessage[];
   onItemAnswer?: (itemId: string, score: number, label: string) => void;
   waitingForItems?: Set<string>; // item IDs that are still interactive
+  hideActiveItems?: boolean; // hide interactive items (rendered externally at bottom)
 }
 
 export function MessageThread({
   messages,
   onItemAnswer,
   waitingForItems,
+  hideActiveItems,
 }: MessageThreadProps) {
   return (
     <div className="flex flex-col gap-3">
@@ -49,6 +51,7 @@ export function MessageThread({
               data={msg.data}
               onItemAnswer={onItemAnswer}
               waitingForItems={waitingForItems}
+              hideActiveItems={hideActiveItems}
             />
           );
         }
@@ -62,12 +65,17 @@ function AssistantMessage({
   data,
   onItemAnswer,
   waitingForItems,
+  hideActiveItems,
 }: {
   data: AssistantMessageData;
   onItemAnswer?: (itemId: string, score: number, label: string) => void;
   waitingForItems?: Set<string>;
+  hideActiveItems?: boolean;
 }) {
   const isCompressed = data.compressed && data.compressed.length > 0;
+
+  // When hideActiveItems is true, skip rendering interactive items (they're shown at the bottom)
+  const shouldHideItems = hideActiveItems && data.items && data.items.length > 0;
 
   return (
     <div className="flex justify-start">
@@ -92,8 +100,8 @@ function AssistantMessage({
               </div>
             )}
 
-            {/* Embedded screening items */}
-            {data.items?.map((item) => (
+            {/* Embedded screening items — hidden when rendered externally */}
+            {!shouldHideItems && data.items?.map((item) => (
               <div key={item.itemId} className="ml-0">
                 <ScreeningItem
                   item={item}

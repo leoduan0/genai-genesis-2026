@@ -141,6 +141,9 @@ Individual questionnaire items.
 | `noiseInflationFactor` | `Float` | Static floor inflation factor. Default 1.5. |
 | `sourceQuality` | `Enum` | Quality of the reliability data |
 | `tags` | `ContentTag[]` | Semantic tags from controlled vocabulary (see ContentTag enum). Used for deduplication matching. |
+| `normativeMean` | `Float?` | Population mean response (legacy, superseded by `normativeResponseDist`) |
+| `normativeSD` | `Float?` | Population SD of response (legacy, superseded by `normativeResponseDist`) |
+| `normativeResponseDist` | `Float[]` | Proportion of the normative population choosing each response category: `[P(min), P(min+1), ..., P(max)]`. Used for probit normal scores normalization. E.g., PHQ-9 item 9 (suicidality, 0-3 scale): `[0.96, 0.03, 0.007, 0.003]`. See "Response Normalization" section below. |
 
 ### `ItemLoading`
 
@@ -402,6 +405,43 @@ enum ContentTag {
   WITHDRAWAL
 }
 ```
+
+---
+
+## Response Normalization
+
+Raw Likert responses must be converted to the latent scale before the Kalman update. The observation model is `y = hᵀz + ε` where `z ~ N(0,1)` at the population mean, so the normalized response must be on a standard normal scale.
+
+### Probit Normal Scores (preferred)
+
+Given the normative response distribution `[P(0), P(1), ..., P(K)]`, each response category `k` is mapped to a standard normal score:
+
+```
+normalScore(k) = Φ⁻¹((F(k-1) + F(k)) / 2)
+```
+
+where `F(k) = P(0) + P(1) + ... + P(k)` is the cumulative proportion, and `F(-1) = 0`.
+
+**Why not mean/SD z-scoring?** Psychiatric items are heavily skewed — suicidality items have ~96% at floor. Z-scoring `(response - mean) / SD` would map a response of 3 on a 0-3 scale to ~9 SD, which is absurd and would massively over-update the posterior. The probit transform correctly maps each response to where it falls in the normal distribution of the population:
+
+| Item | Response 0 | Response 3 | Method |
+|------|-----------|-----------|--------|
+| PHQ-9 #9 (suicidality) | -0.05 | +2.97 | Probit |
+| PHQ-9 #9 (suicidality) | -0.24 | +8.85 | Mean/SD z-score (WRONG) |
+| PHQ-9 #3 (sleep) | -0.64 | +1.55 | Probit |
+| PHQ-9 #3 (sleep) | -0.73 | +2.93 | Mean/SD z-score |
+
+**Fallback:** When no response distribution is available, center on scale midpoint and scale to `[-0.5, +0.5]`. This is wrong for skewed items but preserves basic functionality.
+
+### Data sources for response distributions
+
+- **PHQ-9, GAD-7, PHQ-15**: Kocalevent et al. 2013 (N=5,018); Löwe et al. 2008 (N=5,030) — German general population norms
+- **AUDIT/AUDIT-C**: Shields et al. 2004 (N=14,001); WHO AUDIT manual; NESARC-III
+- **PCL-5**: Blevins et al. 2015; community trauma-exposed samples
+- **Binary instruments** (PC-PTSD-5, DAST-10, MDQ, PQ-16, etc.): endorsement rates from validation studies; `dist = [1-p, p]` where `p` is the endorsement rate
+- **Other instruments**: Estimated from scale-level means and item content similarity with well-normed instruments. Marked in `seed-norms.ts` comments.
+
+**Data file:** `prisma/seed-norms.ts` — all 331 items with response distributions.
 
 ---
 

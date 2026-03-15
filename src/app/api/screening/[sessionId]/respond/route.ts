@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession, loadSessionState, updateSessionState, saveResponse, endSession } from "@/lib/screening/persistence";
+import { getSession, loadSessionState, updateSessionState, saveResponse, endSession, saveInitialTrace } from "@/lib/screening/persistence";
 import { loadFullReferenceData } from "@/lib/screening/loadData";
 import {
   kalmanUpdate,
@@ -40,6 +40,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: "pendingItemId is required" }, { status: 400 });
     }
 
+    // Single DB fetch — reuse for both session metadata and state reconstruction
     const session = await getSession(sessionId);
     if (session.stage !== "BROAD_SCREENING" && session.stage !== "TARGETED") {
       return NextResponse.json(
@@ -51,70 +52,39 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const { referenceData } = await loadFullReferenceData(
       session.populationType as PopulationType,
     );
-    let state = await loadSessionState(sessionId);
-    const initialTrace = trace(state.spectrumCovariance);
 
-    // Rank current items for context
-    const ranked = rankItems(state, referenceData, SCREENING_CONFIG);
+    // Reconstruct state from the already-fetched session (avoid second DB query)
+    let state = reconstructState(session);
 
-    // Call LLM with patient response
+    // Use persisted initial trace, or compute and persist on first call
+    let initialTrace = session.initialTrace;
+    if (initialTrace === null || initialTrace === undefined) {
+      initialTrace = trace(
+        (session.spectrumPriorCovariance as number[][]),
+      );
+      await saveInitialTrace(sessionId, initialTrace);
+    }
+
+    // Build messages for LLM
     const messages: Message[] = [
       ...conversationHistory.map((m: Message) => ({ role: m.role, content: m.content })),
       { role: "user" as const, content: text },
     ];
 
-    const llmResult = await callScreeningLLM({
-      systemPrompt: SCREENING_SYSTEM_PROMPT,
-      messages,
-      tools: SCREENING_TOOLS,
-      maxToolCalls: SCREENING_CONFIG.maxLlmToolCalls,
-      context: {
-        screeningState: state,
-        rankedItems: ranked,
-        conversationHistory: messages,
-        referenceData,
-      },
-    });
-
-    // Process tool calls: score the pending item
+    // Parse score from patient response (inline — skip first LLM call for placeholder)
     let score: number | null = null;
-    let confidence = 1.0;
+    const scoreMatch = text.match(/\d+/);
+    if (scoreMatch) {
+      score = parseInt(scoreMatch[0], 10);
+    }
+
     const impliedScores: { itemId: string; score: number; reasoning: string }[] = [];
-
-    for (const call of llmResult.toolCalls) {
-      if (call.tool === "interpret_response") {
-        score = call.score;
-        confidence = call.confidence;
-      } else if (call.tool === "score_item") {
-        score = call.score;
-      } else if (call.tool === "flag_implied_scores") {
-        impliedScores.push(...call.scores);
-      }
-    }
-
-    // If LLM returned a clarification instead of a score, pass it through
-    const clarificationCall = llmResult.toolCalls.find((c) => c.tool === "ask_clarification");
-    if (clarificationCall && clarificationCall.tool === "ask_clarification") {
-      return NextResponse.json({
-        clarification: clarificationCall.question,
-        score: null,
-        impliedScores: [],
-        nextQuestion: null,
-        selectedItemId: null,
-        terminated: false,
-        terminationReason: null,
-        stage: state.stage,
-        itemsAdministered: state.itemsAdministered.length,
-        estimatedTotal: estimateTotal(state),
-      });
-    }
 
     // Validate and apply score for the pending item
     const pendingItem = referenceData.items.find((i) => i.id === pendingItemId);
     if (score !== null && pendingItem) {
-      // Clamp score to valid range
       score = Math.max(pendingItem.responseMin, Math.min(pendingItem.responseMax, Math.round(score)));
-      const normalized = normalizeResponse(score, pendingItem.responseMin, pendingItem.responseMax);
+      const normalized = normalizeResponse(score, pendingItem.responseMin, pendingItem.responseMax, pendingItem.normativeMean, pendingItem.normativeSD, pendingItem.normativeResponseDist, pendingItem.isReverseCoded);
 
       const result = kalmanUpdate(state, pendingItemId, normalized, referenceData);
       state = result.state;
@@ -135,36 +105,6 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // Apply implied scores
-    for (const implied of impliedScores) {
-      const item = referenceData.items.find((i) => i.id === implied.itemId);
-      if (!item) continue;
-      // Skip if already administered
-      if (state.itemsAdministered.some((a) => a.itemId === implied.itemId)) continue;
-      if (state.autoScoredItems.some((a) => a.itemId === implied.itemId)) continue;
-
-      const clampedScore = Math.max(item.responseMin, Math.min(item.responseMax, Math.round(implied.score)));
-      const normalized = normalizeResponse(clampedScore, item.responseMin, item.responseMax);
-
-      const result = kalmanUpdate(state, implied.itemId, normalized, referenceData);
-      state = result.state;
-      state.autoScoredItems.push({
-        itemId: implied.itemId,
-        response: clampedScore,
-        source: "implied",
-      });
-
-      await saveResponse(
-        sessionId,
-        implied.itemId,
-        clampedScore,
-        normalized,
-        state.itemsAdministered.length + state.autoScoredItems.length,
-        state.stage,
-        result,
-      );
-    }
-
     // Check termination / stage transition
     let terminated = false;
     let terminationReason: string | null = null;
@@ -172,13 +112,18 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     if (state.stage === "BROAD_SCREENING") {
       const termCheck = checkStageOneTermination(state, initialTrace, referenceData, SCREENING_CONFIG);
       if (termCheck.shouldTerminate) {
-        // Transition to stage 2
         state = transitionToStageTwo(state, referenceData, SCREENING_CONFIG);
       }
-    }
-
-    if (state.stage === "TARGETED") {
+    } else if (state.stage === "TARGETED") {
       const termCheck = checkStageTwoTermination(state, referenceData, SCREENING_CONFIG);
+      console.log("[STAGE2 TERM]", {
+        shouldTerminate: termCheck.shouldTerminate,
+        reason: termCheck.reason,
+        stageTwoItems: state.itemsAdministered.filter(a => a.stage === "TARGETED").length,
+        conditionCount: state.conditionDimensionOrder?.length,
+        flaggedConditions: state.flaggedConditions?.length,
+        maxVar: state.conditionVariances ? Math.max(...state.conditionVariances) : null,
+      });
       if (termCheck.shouldTerminate) {
         terminated = true;
         terminationReason = termCheck.reason;
@@ -194,12 +139,35 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     if (!terminated) {
       const nextRanked = rankItems(state, referenceData, SCREENING_CONFIG);
 
+      if (state.stage === "TARGETED" || state.stage === "BROAD_SCREENING") {
+        console.log("[RANK]", {
+          stage: state.stage,
+          candidates: nextRanked.length,
+          top3: nextRanked.slice(0, 3).map(r => ({
+            id: r.itemId.slice(0, 8),
+            evr: r.expectedVarianceReduction.toFixed(6),
+            tier: r.item.tier,
+            loadings: (referenceData.itemLoadingsByItem.get(r.itemId) ?? []).map(l => ({
+              dim: l.dimensionId.slice(0, 8),
+              isCondition: referenceData.conditionIndex.has(l.dimensionId),
+              loading: l.loading,
+            })),
+          })),
+        });
+      }
       if (nextRanked.length === 0) {
+        console.log("[STAGE2 NO ITEMS]", {
+          stage: state.stage,
+          flaggedConditions: state.flaggedConditions,
+          totalCandidates: referenceData.items.length,
+          administered: state.itemsAdministered.length,
+        });
         terminated = true;
         terminationReason = "no_items_remaining";
         state.stage = "COMPLETE";
         await endSession(sessionId, "NO_INFO_GAIN");
       } else {
+        // Use single LLM call — it both selects the item and frames the question
         const nextResult = await callScreeningLLM({
           systemPrompt: SCREENING_SYSTEM_PROMPT,
           messages,
@@ -240,11 +208,40 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     });
   } catch (error) {
     console.error("Failed to process response:", error);
+    const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json(
-      { error: "Failed to process response" },
+      { error: `Failed to process response: ${message}` },
       { status: 500 },
     );
   }
+}
+
+/** Reconstruct ScreeningState from an already-fetched session (avoids second DB query). */
+function reconstructState(session: Awaited<ReturnType<typeof getSession>>) {
+  const itemsAdministered = session.responses.map((r) => ({
+    itemId: r.itemId,
+    response: r.responseRaw,
+    stage: r.stage as "INTAKE" | "BROAD_SCREENING" | "TARGETED" | "COMPLETE",
+  }));
+
+  const conditionDimensionOrder =
+    session.conditionDimensionOrder.length > 0 ? session.conditionDimensionOrder : null;
+
+  const flaggedSpectra = session.flaggedSpectra ?? [];
+  const flaggedConditions = conditionDimensionOrder ? [...conditionDimensionOrder] : [];
+
+  return {
+    stage: session.stage as "INTAKE" | "BROAD_SCREENING" | "TARGETED" | "COMPLETE",
+    spectrumMean: session.spectrumPosteriorMean,
+    spectrumCovariance: (session.spectrumPosteriorCovariance ?? session.spectrumPriorCovariance) as number[][],
+    conditionMean: session.conditionPosteriorMean.length > 0 ? session.conditionPosteriorMean : null,
+    conditionVariances: session.conditionPosteriorVariances.length > 0 ? session.conditionPosteriorVariances : null,
+    conditionDimensionOrder,
+    itemsAdministered,
+    autoScoredItems: [] as { itemId: string; response: number; source: "free_text" | "implied" }[],
+    flaggedSpectra,
+    flaggedConditions,
+  };
 }
 
 function estimateTotal(state: import("@/lib/screening").ScreeningState): number {

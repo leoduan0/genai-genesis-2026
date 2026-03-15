@@ -44,6 +44,9 @@ export interface ItemRef {
   noiseInflationFactor: number;
   tags: ContentTag[];
   tier: InstrumentTier;
+  normativeMean?: number;  // Population mean response (for z-scoring)
+  normativeSD?: number;    // Population SD of response (for z-scoring)
+  normativeResponseDist?: number[];  // [P(min), P(min+1), ..., P(max)] for probit normalization
 }
 
 export interface ItemLoadingRef {
@@ -153,9 +156,23 @@ export interface ConditionResult {
   wasAssessed: boolean;
 }
 
+export type SpectrumMagnitude = "low" | "moderate" | "high" | "very_high";
+
+export interface SpectrumResult {
+  spectrumId: string;
+  name: string;
+  shortCode: string;
+  posteriorMean: number;
+  posteriorVariance: number;
+  magnitude: SpectrumMagnitude;
+  wasAssessed: boolean;
+  conditions: ConditionResult[];
+}
+
 export interface DiagnosticProfile {
   flagged: ConditionResult[];
   unflagged: ConditionResult[];
+  spectrumResults: SpectrumResult[];
   notAssessed: { spectrumId: string; name: string; shortCode: string }[];
   totalItemsAdministered: number;
   totalAutoScored: number;

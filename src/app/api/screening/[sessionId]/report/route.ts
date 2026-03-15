@@ -42,9 +42,15 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
     });
 
     // Persist diagnoses if session is complete and not yet saved
+    // Wrapped in try-catch to handle race conditions (e.g., React StrictMode double-fetch)
     if (session.stage === "COMPLETE" && session.diagnoses.length === 0) {
-      const allResults = [...diagnosticProfile.flagged, ...diagnosticProfile.unflagged];
-      await saveDiagnoses(sessionId, allResults, referenceData);
+      try {
+        const allResults = [...diagnosticProfile.flagged, ...diagnosticProfile.unflagged];
+        await saveDiagnoses(sessionId, allResults, referenceData);
+      } catch (e) {
+        // Ignore duplicate key errors — diagnoses were already saved by a concurrent request
+        console.warn("saveDiagnoses failed (likely concurrent request):", e);
+      }
     }
 
     return NextResponse.json({
@@ -59,8 +65,9 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
     });
   } catch (error) {
     console.error("Failed to generate report:", error);
+    const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json(
-      { error: "Failed to generate report" },
+      { error: `Failed to generate report: ${message}` },
       { status: 500 },
     );
   }

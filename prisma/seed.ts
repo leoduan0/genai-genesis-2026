@@ -7,6 +7,7 @@ import { overlaps } from "./seed-overlaps";
 import { itemLoadings } from "./seed-loadings";
 import { instrumentNoiseData, getItemNoise } from "./seed-noise";
 import { thresholds } from "./seed-thresholds";
+import { allInstrumentNorms } from "./seed-norms";
 
 const pool = new pg.Pool({ connectionString: process.env.DIRECT_URL });
 const adapter = new PrismaPg(pool);
@@ -1962,6 +1963,44 @@ async function main() {
   for (const t of thresholds) {
     const src = t.sourceInstrument ?? "(estimated)";
     console.log(`  ${t.condition.padEnd(8)} ${t.thresholdLiability.toFixed(2).padStart(14)} ${t.sensitivity.toFixed(2).padStart(12)} ${t.specificity.toFixed(2).padStart(12)} ${src.padEnd(20)}`);
+  }
+
+  // ── Seed Normative Response Distributions (Step 6b) ─────────────────────
+  console.log("\nSeeding normative response distributions...");
+  let normUpdateCount = 0;
+  let normSkipCount = 0;
+
+  for (const instNorms of allInstrumentNorms) {
+    const dbInstrument = await prisma.instrument.findUnique({
+      where: { name: instNorms.instrument },
+      include: { items: true },
+    });
+    if (!dbInstrument) {
+      console.error(`  WARNING: Instrument "${instNorms.instrument}" not found in DB`);
+      normSkipCount += instNorms.items.length;
+      continue;
+    }
+
+    for (const itemNorm of instNorms.items) {
+      const dbItem = dbInstrument.items.find(i => i.itemNumber === itemNorm.itemNumber);
+      if (!dbItem) {
+        console.error(`  WARNING: Item ${instNorms.instrument} #${itemNorm.itemNumber} not found`);
+        normSkipCount++;
+        continue;
+      }
+
+      await prisma.item.update({
+        where: { id: dbItem.id },
+        data: {
+          normativeResponseDist: itemNorm.dist,
+        },
+      });
+      normUpdateCount++;
+    }
+  }
+  console.log(`  Updated ${normUpdateCount} items with normative response distributions.`);
+  if (normSkipCount > 0) {
+    console.log(`  WARNING: ${normSkipCount} items skipped due to unresolved references.`);
   }
 
   console.log("\nDone!");

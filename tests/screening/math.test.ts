@@ -39,22 +39,99 @@ const refData = buildMockReferenceData();
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe("normalizeResponse", () => {
-  it("maps min to 0 and max to 1", () => {
-    expect(normalizeResponse(0, 0, 3)).toBe(0);
-    expect(normalizeResponse(3, 0, 3)).toBe(1);
+  // ── Fallback (no norms): midpoint centering ─────────────────────────────
+  it("fallback: maps midpoint to 0, min to -0.5, max to +0.5", () => {
+    expect(normalizeResponse(0, 0, 3)).toBeCloseTo(-0.5);    // min → -0.5
+    expect(normalizeResponse(1.5, 0, 3)).toBeCloseTo(0);      // midpoint → 0
+    expect(normalizeResponse(3, 0, 3)).toBeCloseTo(0.5);      // max → +0.5
   });
 
-  it("maps intermediate values linearly", () => {
-    expect(normalizeResponse(1, 0, 3)).toBeCloseTo(1 / 3);
-    expect(normalizeResponse(2, 0, 3)).toBeCloseTo(2 / 3);
+  it("fallback: maps intermediate values linearly around center", () => {
+    expect(normalizeResponse(1, 0, 3)).toBeCloseTo(-1 / 6);
+    expect(normalizeResponse(2, 0, 3)).toBeCloseTo(1 / 6);
   });
 
-  it("handles equal min/max", () => {
-    expect(normalizeResponse(5, 5, 5)).toBe(0.5);
+  it("fallback: handles equal min/max", () => {
+    expect(normalizeResponse(5, 5, 5)).toBe(0);
   });
 
-  it("handles non-zero min", () => {
-    expect(normalizeResponse(3, 1, 5)).toBeCloseTo(0.5);
+  it("fallback: handles non-zero min — midpoint maps to 0", () => {
+    expect(normalizeResponse(3, 1, 5)).toBeCloseTo(0);        // midpoint of [1,5]
+    expect(normalizeResponse(1, 1, 5)).toBeCloseTo(-0.5);      // min
+    expect(normalizeResponse(5, 1, 5)).toBeCloseTo(0.5);       // max
+  });
+
+  it("falls back to midpoint centering when no normative data provided", () => {
+    expect(normalizeResponse(0, 0, 3)).toBeCloseTo(-0.5);
+    expect(normalizeResponse(3, 0, 3)).toBeCloseTo(0.5);
+  });
+
+  // ── Probit normalization (preferred) ─────────────────────────────────────
+  it("probit: uses response distribution when provided", () => {
+    // Suicidality-like item: 96% answer 0, 3% answer 1, 0.7% answer 2, 0.3% answer 3
+    const dist = [0.96, 0.03, 0.007, 0.003];
+
+    // Response 0: midpoint of [0, 0.96] → Φ⁻¹(0.48) ≈ -0.05
+    const norm0 = normalizeResponse(0, 0, 3, undefined, undefined, dist);
+    expect(norm0).toBeCloseTo(-0.05, 1);
+
+    // Response 1: midpoint of [0.96, 0.99] → Φ⁻¹(0.975) ≈ 1.96
+    const norm1 = normalizeResponse(1, 0, 3, undefined, undefined, dist);
+    expect(norm1).toBeCloseTo(1.96, 1);
+
+    // Response 3: midpoint of [0.997, 1.0] → clamped → Φ⁻¹(0.999) ≈ 3.09
+    const norm3 = normalizeResponse(3, 0, 3, undefined, undefined, dist);
+    expect(norm3).toBeGreaterThan(2.5);
+    expect(norm3).toBeLessThan(3.5);
+  });
+
+  it("probit: evenly distributed item maps to symmetric values", () => {
+    // Uniform distribution: [0.25, 0.25, 0.25, 0.25] on 0-3
+    const dist = [0.25, 0.25, 0.25, 0.25];
+
+    const norm0 = normalizeResponse(0, 0, 3, undefined, undefined, dist);
+    const norm3 = normalizeResponse(3, 0, 3, undefined, undefined, dist);
+
+    // Should be symmetric around 0
+    expect(norm0).toBeCloseTo(-norm3, 1);
+    // Response 0 → Φ⁻¹(0.125) ≈ -1.15
+    expect(norm0).toBeCloseTo(-1.15, 1);
+  });
+
+  it("probit: sleep-like item (moderate spread) maps to moderate range", () => {
+    // Sleep item: P(0)=0.52, P(1)=0.27, P(2)=0.13, P(3)=0.08
+    const dist = [0.52, 0.27, 0.13, 0.08];
+
+    const norm0 = normalizeResponse(0, 0, 3, undefined, undefined, dist);
+    const norm3 = normalizeResponse(3, 0, 3, undefined, undefined, dist);
+
+    // Response 0: Φ⁻¹(0.26) ≈ -0.64
+    expect(norm0).toBeCloseTo(-0.64, 1);
+    // Response 3: Φ⁻¹(0.96) ≈ 1.75
+    expect(norm3).toBeCloseTo(1.75, 1);
+  });
+
+  it("probit: binary item works correctly", () => {
+    // Binary item with 90% answering 0
+    const dist = [0.90, 0.10];
+
+    const norm0 = normalizeResponse(0, 0, 1, undefined, undefined, dist);
+    const norm1 = normalizeResponse(1, 0, 1, undefined, undefined, dist);
+
+    // Response 0: Φ⁻¹(0.45) ≈ -0.13
+    expect(norm0).toBeCloseTo(-0.13, 1);
+    // Response 1: Φ⁻¹(0.95) ≈ 1.64
+    expect(norm1).toBeCloseTo(1.64, 1);
+  });
+
+  it("probit: takes priority over mean/SD when both provided", () => {
+    const dist = [0.96, 0.03, 0.007, 0.003];
+    // If both are provided, probit (dist) should be used, not z-scoring
+    const withDist = normalizeResponse(0, 0, 3, 0.8, 1.2, dist);
+    const withoutDist = normalizeResponse(0, 0, 3, 0.8, 1.2);
+
+    // They should be different — dist gives ~-0.05, z-score gives -0.667
+    expect(Math.abs(withDist - withoutDist)).toBeGreaterThan(0.3);
   });
 });
 
@@ -98,19 +175,19 @@ describe("kalmanUpdateSpectrum", () => {
   /**
    * Hand-calculated test case for I1 (h = [0.7, 0.3, 0]) with initial state:
    *   μ = [0, 0, 0], Σ = [[1, 0.5, 0.2], [0.5, 1, 0.1], [0.2, 0.1, 1]]
-   *   Response: normalized = 2/3 ≈ 0.6667, noise σ² = 0.3
+   *   Response: raw=2 on 0-3 scale → normalized = (2-1.5)/3 = 1/6 ≈ 0.1667, noise σ² = 0.3
    *
    * Σh = [1*0.7 + 0.5*0.3 + 0.2*0, 0.5*0.7 + 1*0.3 + 0.1*0, 0.2*0.7 + 0.1*0.3 + 1*0]
    *    = [0.85, 0.65, 0.17]
    * S = hᵀΣh + σ² = 0.7*0.85 + 0.3*0.65 + 0*0.17 + 0.3 = 0.595 + 0.195 + 0.3 = 1.09
    * K = Σh / S = [0.85/1.09, 0.65/1.09, 0.17/1.09] ≈ [0.7798, 0.5963, 0.1560]
-   * δ = y - hᵀμ = 0.6667 - 0 = 0.6667
-   * μ_new = [0 + 0.7798*0.6667, 0 + 0.5963*0.6667, 0 + 0.1560*0.6667]
-   *       ≈ [0.5199, 0.3975, 0.1040]
+   * δ = y - hᵀμ = 0.1667 - 0 = 0.1667
+   * μ_new = [0 + 0.7798*0.1667, 0 + 0.5963*0.1667, 0 + 0.1560*0.1667]
+   *       ≈ [0.1300, 0.0994, 0.0260]
    */
-  it("updates mean correctly for I1 with response 2/3", () => {
+  it("updates mean correctly for I1 with response 2 on 0-3 scale", () => {
     const state = makeInitialState();
-    const normalized = normalizeResponse(2, 0, 3); // 2/3
+    const normalized = normalizeResponse(2, 0, 3); // (2-1.5)/3 = 1/6
 
     const result = kalmanUpdateSpectrum(state, "I1", normalized, refData);
 
@@ -530,19 +607,18 @@ describe("transitionToStageTwo", () => {
 
   it("flags spectra with elevated mean", () => {
     const state = makeInitialState();
-    state.spectrumMean = [1.0, 0.8, -0.5]; // S1 and S2 > 0.52 threshold
+    state.spectrumMean = [1.0, 0.8, -0.5]; // S1 and S2 > 0.40 threshold
     const newState = transitionToStageTwo(state, refData, SCREENING_CONFIG);
     expect(newState.flaggedSpectra).toContain("S1");
     expect(newState.flaggedSpectra).toContain("S2");
   });
 
-  it("flags spectra with high remaining uncertainty", () => {
+  it("does not flag spectra with low mean even if uncertainty is high", () => {
     const state = makeInitialState();
     state.spectrumMean = [-1, -1, -1]; // All means low
-    // But covariance diagonal is 1.0 → √1.0 = 1.0 > 0.6 threshold
+    // Covariance diagonal is 1.0 (high uncertainty) — but mean-only flagging ignores this
     const newState = transitionToStageTwo(state, refData, SCREENING_CONFIG);
-    // All spectra should be flagged due to high uncertainty
-    expect(newState.flaggedSpectra.length).toBeGreaterThan(0);
+    expect(newState.flaggedSpectra.length).toBe(0);
   });
 
   it("computes condition priors using Σ = λ²Σ_spectrum + (1-λ²)", () => {
@@ -568,7 +644,7 @@ describe("transitionToStageTwo", () => {
     }
   });
 
-  it("computes condition means using μ = baseLiability + λ × μ_spectrum", () => {
+  it("computes condition means using μ = (baseLiability + τ) + λ × μ_spectrum", () => {
     const state = makeInitialState();
     state.spectrumMean = [1.5, 0.0, 0.0];
 
@@ -578,18 +654,18 @@ describe("transitionToStageTwo", () => {
       throw new Error("Expected condition data after transition");
     }
 
-    // C1 (MDD): baseLiability = -1.48, λ=0.85, spectrum mean = 1.5
-    // μ = -1.48 + 0.85 × 1.5 = -1.48 + 1.275 = -0.205
+    // C1 (MDD): baseLiability = -1.48, τ = 1.28, λ=0.85, spectrum mean = 1.5
+    // calibratedPrior = -1.48 + 1.28 = -0.20
+    // μ = -0.20 + 0.85 × 1.5 = 1.075
     const c1Idx = newState.conditionDimensionOrder.indexOf("C1");
     if (c1Idx >= 0) {
-      expect(newState.conditionMean[c1Idx]).toBeCloseTo(-1.48 + 0.85 * 1.5, 4);
+      expect(newState.conditionMean[c1Idx]).toBeCloseTo((-1.48 + 1.28) + 0.85 * 1.5, 4);
     }
   });
 
-  it("only includes conditions under flagged spectra", () => {
+  it("includes ALL conditions in stage 2 regardless of spectrum flagging", () => {
     const state = makeInitialState();
     state.spectrumMean = [1.0, -2.0, -2.0]; // Only S1 elevated
-    // Reduce uncertainty so S2 and S3 aren't flagged
     state.spectrumCovariance = [
       [0.4, 0, 0],
       [0, 0.1, 0],
@@ -598,13 +674,16 @@ describe("transitionToStageTwo", () => {
 
     const newState = transitionToStageTwo(state, refData, SCREENING_CONFIG);
 
-    // S2 has mean -2.0 (< 0.52) and uncertainty √0.1 ≈ 0.316 (< 0.6), so NOT flagged
-    // Only S1 should be flagged → only C1, C3 (both under S1) in conditionDimensionOrder
+    // flaggedSpectra is metadata — only S1 is elevated
     expect(newState.flaggedSpectra).toContain("S1");
     expect(newState.flaggedSpectra).not.toContain("S2");
+
+    // But ALL conditions enter stage 2 (item selection handles prioritization)
     expect(newState.conditionDimensionOrder).toContain("C1");
+    expect(newState.conditionDimensionOrder).toContain("C2");
     expect(newState.conditionDimensionOrder).toContain("C3");
-    expect(newState.conditionDimensionOrder).not.toContain("C2");
+    expect(newState.conditionDimensionOrder).toContain("C4");
+    expect(newState.conditionDimensionOrder?.length).toBe(4);
   });
 });
 

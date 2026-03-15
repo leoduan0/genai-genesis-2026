@@ -1,4 +1,4 @@
-import type { ScreeningState, RankedItem, ReferenceData, DiagnosticProfile, ConditionResult } from "../types";
+import type { ScreeningState, RankedItem, ReferenceData, DiagnosticProfile, ConditionResult, SpectrumResult } from "../types";
 
 // ─── Messages ───────────────────────────────────────────────────────────────
 
@@ -93,6 +93,23 @@ export interface ReportSection {
   content: string;
 }
 
+export interface SpectrumSummary {
+  spectrumId: string;
+  name: string;
+  shortCode: string;
+  magnitude: string;
+  posteriorMean: number;
+  wasAssessed: boolean;
+  conditions: {
+    conditionId: string;
+    name: string;
+    shortCode: string;
+    classification: string;
+    probability: number;
+    wasAssessed: boolean;
+  }[];
+}
+
 export interface ReportResponse {
   disclaimer: string;
   dimensionalProfile: ReportSection;
@@ -100,6 +117,7 @@ export interface ReportResponse {
     condition: ConditionResult;
     talkingPoints: string[];
   }[];
+  spectrumSummaries: SpectrumSummary[];
   unflaggedSummary: ReportSection;
   notAssessed: ReportSection;
   uncertaintyDisclosure: string;

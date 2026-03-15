@@ -27,11 +27,17 @@ export { initState, buildPriorCovarianceFromCorrelations } from "./state";
 export { kalmanUpdate, batchUpdate, normalizeResponse, trace } from "./update";
 export { rankItems, computeRuntimeNoise } from "./selection";
 export { checkStageOneTermination, transitionToStageTwo, eigenvalues } from "./transition";
+export type {
+  SpectrumResult,
+  SpectrumMagnitude,
+} from "./types";
+
 export {
   computeProbability,
   classifyCondition,
   checkStageTwoTermination,
   generateDiagnosticProfile,
+  spectrumMagnitude,
   normalCdf,
 } from "./diagnosis";
 
@@ -46,4 +52,5 @@ export {
   loadItemOverlaps,
   loadThresholds,
   loadFullReferenceData,
+  clearReferenceDataCache,
 } from "./loadData";

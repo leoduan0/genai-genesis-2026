@@ -8,6 +8,7 @@ import type {
   ChatMessage,
   AssistantMessageData,
 } from "@/components/screening/message-thread";
+import { ScreeningItem } from "@/components/screening/screening-item";
 import type { ScreeningItemData } from "@/components/screening/screening-item";
 import { Spinner } from "@/components/ui/spinner";
 
@@ -236,23 +237,35 @@ export default function ScreeningChatPage() {
     [sessionId, processing, messages, conversationHistory, router],
   );
 
+  // Extract the active screening item from the latest assistant message
+  const activeItem = (() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.type === "assistant" && msg.data.items && msg.data.items.length > 0) {
+        return msg.data.items[0];
+      }
+    }
+    return null;
+  })();
+
   return (
-    <main className="flex min-h-screen flex-col bg-(image:--page-bg)">
-      <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 py-6">
+    <main className="relative h-screen overflow-hidden bg-(image:--page-bg)">
+      <div className="mx-auto flex h-full max-w-2xl flex-col px-4 pt-6">
         {/* Progress */}
-        <div className="mb-4">
+        <div className="mb-4 shrink-0">
           <ProgressBar current={itemsCompleted} estimated={estimatedTotal} />
         </div>
 
         {/* Message area */}
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto pb-4"
+          className="hide-scrollbar min-h-0 flex-1 overflow-y-auto pb-4"
         >
           <MessageThread
             messages={messages}
             onItemAnswer={handleItemAnswer}
             waitingForItems={waitingForItems}
+            hideActiveItems
           />
 
           {processing && (
@@ -264,6 +277,20 @@ export default function ScreeningChatPage() {
             </div>
           )}
         </div>
+
+        {/* Spacer — always present so chat area doesn't shift */}
+        <div className="shrink-0 h-44" />
+      </div>
+
+      {/* Active screening item — absolutely positioned within the h-screen main */}
+      <div className="absolute inset-x-0 bottom-6 z-10 mx-auto w-full max-w-2xl px-4">
+        {activeItem && !processing && (
+          <ScreeningItem
+            item={activeItem}
+            onAnswer={handleItemAnswer}
+            disabled={!waitingForItems.has(activeItem.itemId)}
+          />
+        )}
       </div>
     </main>
   );
@@ -278,10 +305,13 @@ function parseItemFromQuestion(
   itemId: string,
 ): ScreeningItemData | null {
   const lines = questionText.split("\n");
-  const text = lines[0].trim();
 
   // Try to parse label line: "(0 = Not at all, 1 = Several days, ...)"
   const labelLine = lines.find((l) => l.trim().startsWith("(") && l.includes("="));
+
+  // Item text is everything before the label line
+  const labelLineIdx = labelLine ? lines.indexOf(labelLine) : lines.length;
+  const text = lines.slice(0, labelLineIdx).join("\n").trim();
   const responseLabels: Record<string, string> = {};
   let responseMin = 0;
   let responseMax = 3;

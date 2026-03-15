@@ -37,7 +37,7 @@ export function ScreeningItem({ item, onAnswer, disabled }: ScreeningItemProps) 
 
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-border/60 bg-muted/30 p-4">
-      <p className="text-sm font-medium text-foreground">{item.text}</p>
+      <p className="whitespace-pre-line text-sm font-medium text-foreground">{item.text}</p>
 
       {isLikert ? (
         <LikertScale

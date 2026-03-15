@@ -129,7 +129,7 @@ export default function PatientIntakePage() {
                           <FormLabel>Gender</FormLabel>
                           <FormControl>
                             <select
-                              className="h-9 w-full rounded-none border border-input bg-transparent px-3 text-sm"
+                              className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm"
                               value={field.value}
                               onChange={field.onChange}
                             >

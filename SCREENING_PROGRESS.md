@@ -11,17 +11,17 @@ Tracks implementation of the Bayesian adaptive screening flow. See `SCREENING_PL
 - [x] **1c** Kalman update — `kalmanUpdate()`, `batchUpdate()`, runtime noise — `update.ts` (spectrum + condition level)
 - [x] **1d** Item selection — `rankItems()`, expected variance reduction — `selection.ts`
 - [x] **1e** Stage transition — termination criteria, `transitionToStageTwo()` with correct variance init (Σ = λ²Σ_spectrum + (1−λ²)) — `transition.ts`
-- [x] **1f** Diagnosis computation — `computeProbability()`, `classifyCondition()` (thresholds from config), stage 2 termination — `diagnosis.ts`
+- [x] **1f** Diagnosis computation — `computeProbability()`, `classifyCondition()`, `classifyConditionSpectrumDerived()` (relaxed uncertainty gate for spectrum-derived estimates), `spectrumMagnitude()`, `deriveConditionFromSpectrum()`, stage 2 termination, `generateDiagnosticProfile()` with `spectrumResults[]` — `diagnosis.ts`
 
 ## Step 2: Data Loading Layer (`src/lib/screening/data.ts`)
 
-- [x] `loadFullReferenceData()` — spectra, conditions, correlations, base rates, items, loadings, overlaps, thresholds — `loadData.ts`
+- [x] `loadFullReferenceData()` — spectra, conditions, correlations, base rates, items, loadings, overlaps, thresholds — `loadData.ts` (cached in-memory by populationType; `clearReferenceDataCache()` to invalidate)
 
 ## Step 3: LLM Integration (`src/lib/screening/llm/`)
 
 - [x] **3a** LLM client (`client.ts`) — `callScreeningLLM()`, `callReportLLM()` wrappers delegating to placeholder impls
 - [x] **3b** General screening function (`screening.ts`) — editable `SCREENING_SYSTEM_PROMPT`, `SCREENING_TOOLS` definitions, `placeholderScreeningLLM()`
-- [x] **3c** Report generation (`report.ts`) — editable `REPORT_SYSTEM_PROMPT`, `placeholderReportLLM()` with template sections
+- [x] **3c** Report generation (`report.ts`) — editable `REPORT_SYSTEM_PROMPT`, `placeholderReportLLM()` with template sections, `spectrumSummaries[]`, condition-specific talking points by short code
 - [x] **3d** Placeholder behavior — verbatim items, direct numeric scoring, template-filled report; swap is one-line change in `client.ts`
 
 ## Step 4: API Routes (`src/app/api/screening/`)
@@ -36,14 +36,15 @@ Tracks implementation of the Bayesian adaptive screening flow. See `SCREENING_PL
 
 - [x] **5a** Add `ScreeningSession`, `SessionResponse`, `SessionDiagnosis` to Prisma schema + `db push`
 - [x] **5b** Persistence functions — create/save/load session state — `persistence.ts`
+- [x] **5c** Bug fixes: `flaggedSpectra` persisted directly (not reconstructed); `initialTrace` stored on session and computed from prior only on first respond call; spectrum-derived condition classification relaxes uncertainty gate
 
 ## Step 6: Patient Screening UI (`/patient/screening/`)
 
 - [x] **6a** Entry point — population selector, begin button — `screening/page.tsx`
 - [x] **6b** Phase 0: Free-text intake — textarea, loading spinner, transition screen — `screening/intake/page.tsx`
 - [x] **6c** Phase 1 & 2: Chat — vertical chat, Likert/MCQ items, Q:/A: compression, progress bar — `screening/chat/page.tsx` + `components/screening/`
-- [x] **6d** Phase 3: Report — dimensional profile, flagged conditions, talking points, not-assessed — `screening/report/page.tsx`
-- [ ] **6e** Phase 4: Follow-up — Q&A chat about the report
+- [x] **6d** Phase 3: Report — two-tab layout (Conditions tab with flagged conditions + talking points; Dimensional tab with spectrum→condition hierarchy + magnitude badges + tooltips) — `screening/report/page.tsx`
+- [x] **6e** Phase 4: Follow-up — Q&A chat about the report — `screening/followup/page.tsx`
 
 ## Step 7: Doctor Review UI
 
@@ -52,7 +53,7 @@ Tracks implementation of the Bayesian adaptive screening flow. See `SCREENING_PL
 
 ## Step 8: Testing & Validation
 
-- [ ] **8a** Math engine unit tests (including threshold sensitivity tests)
+- [x] **8a** Math engine unit tests (77 tests) — `tests/screening/math.test.ts` + `tests/screening/helpers.ts`, vitest config
 - [ ] **8b** Integration tests (full flow with mock LLM)
 - [ ] **8c** LLM output validation tests
 

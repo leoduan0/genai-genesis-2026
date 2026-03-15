@@ -96,6 +96,9 @@ export async function loadItems(tier?: InstrumentTier): Promise<ItemRef[]> {
     noiseInflationFactor: r.noiseInflationFactor,
     tags: r.tags,
     tier: r.instrument.tier,
+    normativeMean: r.normativeMean ?? undefined,
+    normativeSD: r.normativeSD ?? undefined,
+    normativeResponseDist: r.normativeResponseDist.length > 0 ? r.normativeResponseDist : undefined,
   }));
 }
 
@@ -142,17 +145,40 @@ export async function loadThresholds(): Promise<ThresholdRef[]> {
   return rows;
 }
 
+// ─── Reference Data Cache ───────────────────────────────────────────────────
+
+/**
+ * Module-level cache for reference data, keyed by populationType.
+ * Reference data (spectra, conditions, items, loadings, thresholds, etc.) is
+ * static for the lifetime of the server process — it never changes during a
+ * screening session. Caching avoids 9 DB round-trips per patient response.
+ */
+const refDataCache = new Map<
+  PopulationType,
+  { referenceData: ReferenceData; correlations: Map<string, number> }
+>();
+
+/** Clear the cache (useful for tests or after seeding new data). */
+export function clearReferenceDataCache(): void {
+  refDataCache.clear();
+}
+
 // ─── Full Reference Data Bundle ─────────────────────────────────────────────
 
 /**
  * Load all reference data needed for a screening session.
  * Returns the ReferenceData bundle with pre-built lookup indices,
  * plus the correlation map needed by initState().
+ *
+ * Results are cached in-memory by populationType — subsequent calls for the
+ * same population return instantly without hitting the database.
  */
 export async function loadFullReferenceData(populationType: PopulationType): Promise<{
   referenceData: ReferenceData;
   correlations: Map<string, number>;
 }> {
+  const cached = refDataCache.get(populationType);
+  if (cached) return cached;
   // Load everything in parallel
   const [spectra, conditions, conditionSpectrumLoadings, baseRates, items, itemLoadings, itemOverlaps, thresholds, correlations] =
     await Promise.all([
@@ -229,5 +255,7 @@ export async function loadFullReferenceData(populationType: PopulationType): Pro
     conditionsBySpectrum,
   };
 
-  return { referenceData, correlations };
+  const result = { referenceData, correlations };
+  refDataCache.set(populationType, result);
+  return result;
 }

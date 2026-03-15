@@ -107,7 +107,7 @@ export default function SignUpPage() {
                         </FieldLabel>
                         <select
                           id="form-sign-up-role"
-                          className="h-8 rounded-none border border-input bg-transparent px-2.5 text-xs"
+                          className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-xs"
                           value={field.value}
                           onChange={field.onChange}
                         >

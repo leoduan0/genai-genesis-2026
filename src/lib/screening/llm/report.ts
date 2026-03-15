@@ -2,7 +2,7 @@ import type {
   ReportLLMOptions,
   ReportResponse,
 } from "./types";
-import type { ConditionResult } from "../types";
+import type { ConditionResult, ReferenceData } from "../types";
 
 // ─── System Prompt (editable) ───────────────────────────────────────────────
 
@@ -59,7 +59,25 @@ export async function placeholderReportLLM(
 
   const flaggedConditions = diagnosticProfile.flagged.map((condition) => ({
     condition,
-    talkingPoints: generatePlaceholderTalkingPoints(condition),
+    talkingPoints: generatePlaceholderTalkingPoints(condition, referenceData),
+  }));
+
+  // Build spectrum summaries from the diagnostic profile's spectrumResults
+  const spectrumSummaries = diagnosticProfile.spectrumResults.map((sr) => ({
+    spectrumId: sr.spectrumId,
+    name: sr.name,
+    shortCode: sr.shortCode,
+    magnitude: sr.magnitude,
+    posteriorMean: sr.posteriorMean,
+    wasAssessed: sr.wasAssessed,
+    conditions: sr.conditions.map((c) => ({
+      conditionId: c.conditionId,
+      name: c.name,
+      shortCode: c.shortCode,
+      classification: c.classification,
+      probability: c.probability,
+      wasAssessed: c.wasAssessed,
+    })),
   }));
 
   const unflaggedNames = diagnosticProfile.unflagged
@@ -94,6 +112,7 @@ export async function placeholderReportLLM(
     disclaimer,
     dimensionalProfile,
     flaggedConditions,
+    spectrumSummaries,
     unflaggedSummary,
     notAssessed,
     uncertaintyDisclosure,
@@ -102,23 +121,86 @@ export async function placeholderReportLLM(
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function generatePlaceholderTalkingPoints(condition: ConditionResult): string[] {
+/** Map condition short codes to specific, actionable talking points. */
+const CONDITION_TALKING_POINTS: Record<string, string[]> = {
+  MDD: [
+    "Mention changes in your mood, energy, or motivation over the past few weeks",
+    "Describe any shifts in sleep patterns or appetite you've noticed",
+    "Share how these feelings have affected your daily activities or relationships",
+  ],
+  GAD: [
+    "Describe the topics or situations that tend to trigger your worry",
+    "Mention if you've noticed physical tension, restlessness, or difficulty relaxing",
+    "Share how often worry feels difficult to control or out of proportion",
+  ],
+  PD: [
+    "Describe any sudden episodes of intense fear or physical discomfort",
+    "Mention specific physical symptoms like racing heart, shortness of breath, or dizziness",
+    "Share whether you've started avoiding certain places or situations",
+  ],
+  SAD: [
+    "Describe situations where you feel most anxious or self-conscious",
+    "Mention if fear of judgment or embarrassment affects your daily choices",
+    "Share how social anxiety has impacted your work, school, or relationships",
+  ],
+  PTSD: [
+    "You don't need to share details of what happened — just mention that you've experienced something distressing",
+    "Describe any intrusive memories, nightmares, or flashbacks you've been having",
+    "Mention if you've been avoiding certain reminders, places, or conversations",
+  ],
+  OCD: [
+    "Describe any recurring unwanted thoughts that cause distress",
+    "Mention any behaviors or rituals you feel compelled to repeat",
+    "Share how much time these thoughts or behaviors take up in your day",
+  ],
+  BPD: [
+    "Describe any patterns of intense or rapidly shifting emotions",
+    "Mention how your relationships tend to feel — whether they swing between closeness and conflict",
+    "Share if you've noticed impulsive behaviors during emotional distress",
+  ],
+  ADHD: [
+    "Describe situations where focus or organization is most challenging",
+    "Mention if restlessness, impulsivity, or procrastination affects your daily life",
+    "Share whether these patterns have been present since childhood",
+  ],
+  BIP: [
+    "Describe any periods of unusually elevated energy, reduced need for sleep, or racing thoughts",
+    "Mention if you've experienced episodes that felt very different from your usual mood",
+    "Share how these shifts have affected your decision-making or relationships",
+  ],
+  AUD: [
+    "Be honest about your typical drinking patterns and any recent changes",
+    "Mention if you've noticed needing more to feel the same effect",
+    "Share any concerns you have about how alcohol affects your life or health",
+  ],
+  SUD: [
+    "Be honest about substance use patterns without minimizing or exaggerating",
+    "Mention any changes in how much you use or how it affects you",
+    "Share any concerns about dependency or impact on daily functioning",
+  ],
+};
+
+function generatePlaceholderTalkingPoints(condition: ConditionResult, referenceData: ReferenceData): string[] {
+  // Use condition-specific talking points if available
+  const specific = CONDITION_TALKING_POINTS[condition.shortCode];
+  if (specific) return specific;
+
+  // Fallback for conditions without specific talking points
   const points: string[] = [];
   const label = classificationLabel(condition.classification);
 
   points.push(
-    `Your responses suggest patterns ${label} ${condition.name} (likelihood: ${(condition.probability * 100).toFixed(0)}%).`,
+    `Your responses suggest patterns ${label} ${condition.name} — mention this area to your provider.`,
+  );
+  points.push(
+    "Describe any specific symptoms, behaviors, or changes you've noticed related to this area.",
   );
 
   if (condition.uncertainty > 0.3) {
     points.push(
-      "There is meaningful uncertainty in this estimate — additional evaluation would help clarify.",
+      "There is some uncertainty in this estimate — a provider can help clarify with a more thorough assessment.",
     );
   }
-
-  points.push(
-    "Consider discussing this area with your provider, who can conduct a more thorough assessment.",
-  );
 
   return points;
 }

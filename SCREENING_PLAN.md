@@ -65,16 +65,16 @@ export const SCREENING_CONFIG = {
   maxStageOneItems: 20,
 
   // Spectrum flagging for stage 2
-  spectrumFlagMeanPercentile: 0.52,    // μⱼ above this → flag (70th percentile of N(0,1))
-  spectrumFlagUncertaintyRatio: 0.6,   // √Σⱼⱼ still above this fraction of prior → flag
+  spectrumFlagMeanZ: 0.40,             // z-score threshold (~66th percentile of N(0,1))
 
   // Condition classification
   classification: {
     likelyProbability: 0.60,
     likelyMaxUncertainty: 0.4,
     ruledOutProbability: 0.10,
-    ruledOutMaxUncertainty: 0.4,
+    ruledOutMaxUncertainty: 0.5,
     flaggedProbability: 0.25,
+    flaggedMaxUncertainty: 0.7,
   },
 
   // Stage 2 termination
@@ -142,7 +142,7 @@ export const SCREENING_CONFIG = {
   - Return `{ shouldTransition: boolean, reason: string }`.
 - `transitionToStageTwo(state, referenceData, config)`:
   - Project spectrum posterior → condition priors via L matrix (`ConditionSpectrumLoading`).
-  - Flag spectra where μⱼ > `config.spectrumFlagMeanPercentile` OR √Σⱼⱼ > `config.spectrumFlagUncertaintyRatio` × prior √Σⱼⱼ.
+  - Flag spectra where μⱼ > `config.spectrumFlagMeanZ` (mean-only criterion — no uncertainty flag).
   - **Condition prior means:** μ_condition = μ_condition_base + L_row × μ_spectrum_posterior (from `BaseRate` + `ConditionSpectrumLoading`).
   - **Condition prior variances:** For each condition with loading λ on its parent spectrum with posterior variance Σ_spectrum:
     ```
@@ -159,14 +159,17 @@ export const SCREENING_CONFIG = {
   - All thresholds read from `config.classification`:
     - P > `likelyProbability` AND √Σ < `likelyMaxUncertainty` → "likely"
     - P < `ruledOutProbability` AND √Σ < `ruledOutMaxUncertainty` → "ruled_out"
-    - P > `flaggedProbability` → "flagged"
+    - P > `flaggedProbability` AND √Σ < `flaggedMaxUncertainty` → "flagged"
     - else → "uncertain"
   - These thresholds are the most sensitive part of the system. Different clinical contexts may need different values (e.g., a more aggressive screener lowers `flaggedProbability`).
 - `checkStageTwoTermination(state, config)`:
   - All flagged conditions resolved (likely/ruled_out/no-info-left).
   - Best item reduces max(Σⱼⱼ) by < `config.stageTwoMinVarianceReduction` of current value.
   - Stage 2 items >= `config.maxStageTwoItems`.
-- `generateDiagnosticProfile(state, referenceData, config)`: Full report data structure.
+- `spectrumMagnitude(mean)`: Map posterior mean z-score to human label (low/moderate/high/very_high).
+- `classifyConditionSpectrumDerived(probability, uncertainty, config)`: Relaxed classification for conditions not directly assessed — bypasses the uncertainty gate for "flagged" since high uncertainty is structural (spectrum→condition projection), not due to lack of data.
+- `deriveConditionFromSpectrum(condition, state, refData, config)`: Derive a condition estimate from its parent spectrum posterior (μ = baseMean + λ×spectrumMean, Σ = λ²Σ_spectrum + (1−λ²)).
+- `generateDiagnosticProfile(state, referenceData, config)`: Full report data structure with `spectrumResults[]` containing spectrum magnitude, nested condition results, and wasAssessed flags.
 
 ---
 
@@ -182,7 +185,7 @@ Server-side functions to load reference data from Prisma. All in `src/lib/screen
 - `loadItemLoadings(itemIds)`: Loading vectors for specific items.
 - `loadItemOverlaps(itemIds)`: Overlap pairs involving given items.
 - `loadThresholds()`: All clinical thresholds.
-- `loadFullReferenceData(populationType)`: Single call that loads everything, returns a `ReferenceData` bundle. All dimension counts are properties of this bundle.
+- `loadFullReferenceData(populationType)`: Single call that loads everything, returns a `ReferenceData` bundle. All dimension counts are properties of this bundle. **Cached in-memory by populationType** — subsequent calls skip the DB entirely. Call `clearReferenceDataCache()` after seeding new data or in tests.
 
 ---
 
@@ -354,16 +357,35 @@ All new pages under `/patient/screening/`.
 
 ### 6d: Phase 3 — Report (`/patient/screening/report/page.tsx`)
 
-- Dimensional profile visualization:
-  - Grouped by spectrum.
-  - Each condition: horizontal bar showing likelihood (low/moderate/high) with uncertainty range.
-  - Color coding: green (ruled out), yellow (uncertain), orange (flagged), red (likely).
-- Flagged conditions section with talking points.
-- "What was not assessed" section.
-- Uncertainty disclosure banner at top.
-- "Ask a question" button → opens follow-up chat.
-- "Save & return to dashboard" button.
-- "Share with your clinician" button (if doctor assigned).
+Two-tab layout with shadcn Tabs + Tooltip:
+
+**Tab 1 — Conditions:**
+- List of flagged conditions with color-coded classification badges:
+  - "Likely" (red) — high probability, low uncertainty
+  - "Possible" (amber, with %) — moderate probability
+  - "Uncertain" (grey) / "Unlikely" (outline)
+- Each flagged condition has condition-specific talking points (e.g., "Mention changes in your mood, energy, or motivation" not generic "you might have depression").
+- Unflagged conditions summary section below.
+
+**Tab 2 — Dimensional:**
+- Hierarchical model view: spectra on the first layer, conditions nested underneath.
+- Each spectrum shows magnitude badge: Very High (red), High (amber), Moderate (grey), Low (outline), Not Screened (grey outline).
+- Each condition shown as a colored chip with abbreviated short code and tooltip showing full name, classification, and probability.
+- Chip colors: red (likely), amber (flagged), green (ruled out), slate (uncertain), grey (not assessed).
+
+**Shared:**
+- Disclaimer banner at top (amber card).
+- Uncertainty disclosure footer.
+- "Ask a question" → follow-up chat. "Return to dashboard" button.
+
+**Report API (`report/route.ts`):**
+- Returns `diagnosticProfile` (with `spectrumResults[]`), `report` (with `spectrumSummaries[]`), and `sessionMeta`.
+- `spectrumSummaries` contain magnitude, posteriorMean, wasAssessed, and nested condition results.
+
+**Report LLM (`llm/report.ts`):**
+- `ReportResponse` includes `spectrumSummaries: SpectrumSummary[]` built from `diagnosticProfile.spectrumResults`.
+- Condition-specific talking points keyed by short code (MDD, GAD, PTSD, OCD, etc.) with actionable, specific advice.
+- Fallback generic talking points for conditions without specific templates.
 
 ### 6e: Phase 4 — Follow-up (`/patient/screening/followup/page.tsx`)
 

@@ -213,6 +213,9 @@ model Item {
   testRetestR           Float?
   noiseVariance         Float         @default(0.5)
   noiseInflationFactor  Float         @default(1.5)
+  normativeMean         Float?        // Population mean response (for z-score normalization)
+  normativeSD           Float?        // Population SD of response (for z-score normalization)
+  normativeResponseDist Float[]       @default([]) // Proportion choosing each response category [P(min), P(min+1), ..., P(max)] for probit normalization
   sourceQuality         SourceQuality @default(ESTIMATED)
   tags                  ContentTag[]
 
@@ -309,7 +312,11 @@ model ScreeningSession {
   conditionPosteriorVariances Float[]             @default([])
   conditionDimensionOrder     String[]            @default([])
 
+  // Flagged spectra (persisted from stage transition)
+  flaggedSpectra              String[]            @default([])
+
   // Metadata
+  initialTrace                Float?              // tr(Σ₀), set on first respond call
   itemsAdministered           Int                 @default(0)
   stageTransitionAt           DateTime?
   terminated                  Boolean             @default(false)

@@ -48,6 +48,7 @@ export async function createSession(
       conditionPosteriorMean: [],
       conditionPosteriorVariances: [],
       conditionDimensionOrder: [],
+      flaggedSpectra: [],
       itemsAdministered: 0,
     },
   });
@@ -114,12 +115,29 @@ export async function updateSessionState(
       conditionPosteriorMean: state.conditionMean ?? [],
       conditionPosteriorVariances: state.conditionVariances ?? [],
       conditionDimensionOrder: state.conditionDimensionOrder ?? [],
+      flaggedSpectra: state.flaggedSpectra,
       itemsAdministered: state.itemsAdministered.length,
       ...(state.stage === "TARGETED" && {
         stageTransitionAt: new Date(),
         conditionPriorMean: state.conditionMean ?? [],
       }),
     },
+  });
+}
+
+// ─── Initial Trace ──────────────────────────────────────────────────────────
+
+/**
+ * Persist the initial trace (tr(Σ₀)) on the session.
+ * Called once on the first respond call; subsequent calls are no-ops.
+ */
+export async function saveInitialTrace(
+  sessionId: string,
+  initialTrace: number,
+): Promise<void> {
+  await prisma.screeningSession.update({
+    where: { id: sessionId },
+    data: { initialTrace },
   });
 }
 
@@ -167,7 +185,7 @@ export async function saveDiagnoses(
     };
   });
 
-  await prisma.sessionDiagnosis.createMany({ data });
+  await prisma.sessionDiagnosis.createMany({ data, skipDuplicates: true });
 }
 
 // ─── Get Session ────────────────────────────────────────────────────────────
@@ -188,6 +206,9 @@ export async function getSession(sessionId: string) {
 /**
  * Reconstruct a ScreeningState from a persisted session.
  * Used when resuming a session.
+ *
+ * flaggedConditions = conditionDimensionOrder (all conditions enter stage 2).
+ * flaggedSpectra is persisted directly (elevated spectra, used for reporting only).
  */
 export async function loadSessionState(sessionId: string): Promise<ScreeningState> {
   const session = await getSession(sessionId);
@@ -198,17 +219,24 @@ export async function loadSessionState(sessionId: string): Promise<ScreeningStat
     stage: r.stage as ScreeningState["stage"],
   }));
 
+  const conditionDimensionOrder =
+    session.conditionDimensionOrder.length > 0 ? session.conditionDimensionOrder : null;
+
+  // Use persisted flaggedSpectra directly
+  const flaggedSpectra = session.flaggedSpectra ?? [];
+  const flaggedConditions = conditionDimensionOrder ? [...conditionDimensionOrder] : [];
+
   return {
     stage: session.stage as ScreeningState["stage"],
     spectrumMean: session.spectrumPosteriorMean,
-    spectrumCovariance: session.spectrumPosteriorCovariance as number[][],
+    spectrumCovariance: (session.spectrumPosteriorCovariance ?? session.spectrumPriorCovariance) as number[][],
     conditionMean: session.conditionPosteriorMean.length > 0 ? session.conditionPosteriorMean : null,
     conditionVariances: session.conditionPosteriorVariances.length > 0 ? session.conditionPosteriorVariances : null,
-    conditionDimensionOrder: session.conditionDimensionOrder.length > 0 ? session.conditionDimensionOrder : null,
+    conditionDimensionOrder,
     itemsAdministered,
     autoScoredItems: [], // Auto-scored items are tracked in responses; not separately reconstructed
-    flaggedSpectra: [],  // Reconstructed from conditionDimensionOrder + reference data if needed
-    flaggedConditions: [],
+    flaggedSpectra,
+    flaggedConditions,
   };
 }
 

@@ -120,7 +120,7 @@ export default async function PatientDetailPage({
               {intakeForms.map((form) => (
                 <div
                   key={form.id}
-                  className="rounded-none border border-border p-4 text-sm"
+                  className="rounded-xl border border-border p-4 text-sm"
                 >
                   <div className="flex items-center justify-between">
                     <span className="font-medium">
@@ -150,7 +150,7 @@ export default async function PatientDetailPage({
               {chatSessions.map((session) => (
                 <div
                   key={session.id}
-                  className="rounded-none border border-border p-4 text-sm"
+                  className="rounded-xl border border-border p-4 text-sm"
                 >
                   <div className="flex items-center justify-between">
                     <span className="font-medium">
@@ -187,7 +187,7 @@ export default async function PatientDetailPage({
               {therapySessions.map((session) => (
                 <div
                   key={session.id}
-                  className="rounded-none border border-border p-4 text-sm"
+                  className="rounded-xl border border-border p-4 text-sm"
                 >
                   <div className="flex items-center justify-between">
                     <span className="font-medium">

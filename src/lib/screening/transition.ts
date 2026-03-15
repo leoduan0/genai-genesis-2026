@@ -1,6 +1,6 @@
 import type { ScreeningConfig } from "./config";
 import type { ReferenceData, ScreeningState, TerminationCheck } from "./types";
-import { trace } from "./update";
+// trace no longer used for termination (replaced by expected prob change)
 import { rankItems } from "./selection";
 
 // ─── Eigenvalue Computation ───────────────────────────────────────────────────
@@ -111,11 +111,11 @@ export function checkStageOneTermination(
     }
   }
 
-  // Criterion 2: marginal info gain too small
+  // Criterion 2: best item's expected trace reduction too small
   const ranked = rankItems(state, refData, config);
   if (ranked.length > 0) {
-    const bestReduction = ranked[0].expectedVarianceReduction;
-    if (bestReduction < config.minVarianceReductionFraction * initialTrace) {
+    const bestScore = ranked[0].expectedVarianceReduction;
+    if (bestScore < config.minStageOneTraceReduction) {
       return { shouldTerminate: true, reason: "marginal_info_gain" };
     }
   } else {
@@ -132,43 +132,37 @@ export function checkStageOneTermination(
  * Transition from broad screening (spectrum-level) to targeted screening
  * (condition-level).
  *
- * 1. Flag spectra where μⱼ > spectrumFlagMeanPercentile OR
- *    √Σⱼⱼ > spectrumFlagUncertaintyRatio × prior √Σⱼⱼ (= 1.0).
+ * 1. Record which spectra have elevated means (for reporting), but do NOT
+ *    use this as a gate — all conditions enter stage 2.
  *
- * 2. For each condition under flagged spectra:
+ * 2. For each condition:
  *    - μ_condition = liabilityMean (from BaseRate) + L_loading × μ_spectrum_posterior
  *    - Σ_condition = λ² × Σ_spectrum_posterior + (1 − λ²)
  *    Where λ is the condition's primary loading on its parent spectrum.
  *
- * 3. Set conditionDimensionOrder to the IDs of conditions under flagged spectra.
+ * 3. The stage 2 item selection (expectedProbChangeCondition) naturally
+ *    prioritizes conditions near the diagnostic threshold and ignores
+ *    resolved ones, so no hard gate is needed here.
  */
 export function transitionToStageTwo(
   state: ScreeningState,
   refData: ReferenceData,
   config: ScreeningConfig,
 ): ScreeningState {
-  // 1. Flag spectra
+  // 1. Record elevated spectra (metadata for reporting, not a gate)
   const flaggedSpectra: string[] = [];
 
   for (let i = 0; i < refData.spectra.length; i++) {
     const spectrum = refData.spectra[i];
     const mean = state.spectrumMean[i];
-    const posteriorStd = Math.sqrt(state.spectrumCovariance[i][i]);
-    const priorStd = 1.0; // Unit prior variance
 
-    const meanExceeds = mean > config.spectrumFlagMeanPercentile;
-    const stillUncertain = posteriorStd > config.spectrumFlagUncertaintyRatio * priorStd;
-
-    if (meanExceeds || stillUncertain) {
+    if (mean > config.spectrumFlagMeanZ) {
       flaggedSpectra.push(spectrum.id);
     }
   }
 
-  // 2. Identify conditions under flagged spectra
-  const flaggedSpectrumSet = new Set(flaggedSpectra);
-  const targetConditions = refData.conditions.filter((c) =>
-    flaggedSpectrumSet.has(c.parentId),
-  );
+  // 2. ALL conditions enter stage 2 — item selection handles prioritization
+  const targetConditions = refData.conditions;
 
   // 3. Compute condition priors
   const conditionDimensionOrder = targetConditions.map((c) => c.id);
@@ -198,8 +192,15 @@ export function transitionToStageTwo(
     const baseRate = refData.baseRates.find((br) => br.dimensionId === condition.id);
     const baseLiabilityMean = baseRate?.liabilityMean ?? 0;
 
-    // μ_condition = baseLiabilityMean + λ × μ_spectrum_posterior
-    const mu = baseLiabilityMean + lambda * spectrumPosteriorMean;
+    // The DB stores baseLiabilityMean = Φ⁻¹(prevalence), calibrated to threshold=0.
+    // With non-zero thresholds, the correct prior mean is τ + Φ⁻¹(prevalence)
+    // so that P(z > τ | prior) = prevalence.
+    const threshold = refData.thresholdByCondition.get(condition.id);
+    const tau = threshold?.thresholdLiability ?? 0;
+    const calibratedPriorMean = baseLiabilityMean + tau;
+
+    // μ_condition = calibratedPriorMean + λ × μ_spectrum_posterior
+    const mu = calibratedPriorMean + lambda * spectrumPosteriorMean;
 
     // Σ_condition = λ² × Σ_spectrum_posterior + (1 − λ²)
     const variance = lambda * lambda * spectrumPosteriorVar + (1 - lambda * lambda);

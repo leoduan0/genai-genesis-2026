@@ -9,7 +9,7 @@ type LinkButtonProps = LinkProps & {
 }
 
 const baseClassName =
-  "inline-flex h-8 items-center justify-center gap-1.5 rounded-none border border-transparent bg-primary px-2.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
+  "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-transparent bg-primary px-2.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
 
 export function LinkButton({ className, children, ...props }: LinkButtonProps) {
   return (

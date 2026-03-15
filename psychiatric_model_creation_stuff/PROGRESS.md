@@ -157,3 +157,21 @@ Tracks implementation progress for the Bayesian Adaptive Psychiatric Screening M
 - All 35 thresholds present, range [0.84, 1.88]. All 27 instruments have noise variance data, σ² range [0.195, 0.390].
 
 **Validation script:** `prisma/validate.ts` — standalone, no database connection required.
+
+## Step 9: Classification & Flagging Tuning
+**Status:** DONE
+
+Three changes to the screening config and logic:
+
+**1. Removed `spectrumFlagUncertaintyRatio` — mean-only spectrum flagging.**
+- Previously, spectra were flagged for stage 2 if mean exceeded threshold OR posterior std was still high relative to prior. The uncertainty criterion caused the system to chase low-mean, high-uncertainty spectra — wasting stage 2 items on conditions with low priors. Mean-only flagging focuses stage 2 on spectra with actual signal.
+- Config field renamed: `spectrumFlagMeanPercentile` → `spectrumFlagMeanZ` (was never a percentile — it's a z-score threshold; 0.40 ≈ 66th percentile of N(0,1)).
+
+**2. Asymmetric uncertainty gates for classification.**
+- `ruledOutMaxUncertainty` raised from 0.4 to 0.5. Ruling out at P < 0.10 is lower stakes — a slightly wider uncertainty band is acceptable since the probability is already very low.
+
+**3. Added uncertainty gate to "flagged" classification.**
+- Previously, any condition with P > 0.25 was classified "flagged" regardless of uncertainty. A condition with P=0.26 and std=0.95 (uninformative posterior) would be "flagged" — implying a clinical signal when there was none.
+- Added `flaggedMaxUncertainty: 0.7` — conditions with very high uncertainty now correctly classify as "uncertain" instead of "flagged."
+
+**Files changed:** `src/lib/screening/config.ts`, `src/lib/screening/transition.ts`, `src/lib/screening/diagnosis.ts`, `SCREENING_PLAN.md`.

@@ -36,18 +36,18 @@ export default function Home() {
               <CardDescription>Adaptive, reflective, and calm.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="rounded-none border border-border bg-muted/40 p-4 text-sm text-foreground">
+              <div className="rounded-xl border border-border bg-muted/40 p-4 text-sm text-foreground">
                 Assistant: What feels most important for your clinician to
                 understand today?
               </div>
-              <div className="rounded-none border border-border bg-background p-4 text-sm text-muted-foreground">
+              <div className="rounded-xl border border-border bg-background p-4 text-sm text-muted-foreground">
                 Patient: I feel stuck in perfectionism and the pressure is
                 exhausting.
               </div>
-              <div className="rounded-none border border-border bg-muted/40 p-4 text-sm text-foreground">
+              <div className="rounded-xl border border-border bg-muted/40 p-4 text-sm text-foreground">
                 Assistant: When do you notice that pressure rising the most?
               </div>
-              <div className="rounded-none border border-border bg-background p-4 text-sm text-muted-foreground">
+              <div className="rounded-xl border border-border bg-background p-4 text-sm text-muted-foreground">
                 Transcript auto-saved for clinician review.
               </div>
             </CardContent>

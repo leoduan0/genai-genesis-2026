@@ -87,13 +87,17 @@ This covariance update doesn't depend on yᵢ — uncertainty shrinks the same a
 
 Stage-one items have high loadings across multiple dimensions (high general psychopathology / p-factor loading). They are diagnostically nonspecific — they tell you *that* something is wrong and roughly where in the space of conditions it lives, but not precisely what. These items appear on many instruments and have the most extensive published cross-loading data.
 
-**Stage two (targeted disambiguation):** Select items whose **h**ᵢ aligns with the eigenvectors of **Σ** corresponding to its largest eigenvalues.
+**Stage two (targeted disambiguation):** Select items that maximize probability-weighted expected variance reduction across conditions.
+
+For each candidate item, compute the per-condition variance reduction (h²σ⁴ / (h²σ² + σ²_noise)) and weight it by the condition's current probability P(zⱼ > τⱼ). Sum across all conditions to get the item's score.
 
 | Symbol | What it represents |
 |--------|-------------------|
-| Eigenvalues of **Σ** | How much uncertainty exists along each independent axis of the remaining uncertainty ellipsoid. Large eigenvalue = a direction you're still very unsure about |
-| Eigenvectors of **Σ** | The directions those axes point — e.g., "the OCD-vs-anxiety distinction" |
-| "Aligns with" | The item's loading vector points in the same direction as your remaining uncertainty, so it maximally resolves it |
+| h²σ⁴ / (h²σ² + σ²_noise) | Raw variance reduction for one condition — how much this item would shrink that condition's uncertainty |
+| P(zⱼ > τⱼ) | Current probability that the condition exceeds its clinical threshold — used as a weight so that items targeting likely conditions are prioritized |
+| Σⱼ Pⱼ × reductionⱼ | Total score — the item's expected utility, balancing informativeness against clinical relevance |
+
+This weighting prevents the system from spending items on rare, high-variance conditions (e.g., schizophrenia at P=0.8%) when common conditions (e.g., MDD at P=30%) still need disambiguation. Without it, pure variance reduction favors rare conditions because their prior variance is larger.
 
 Stage-two items have narrow, strong loadings on one or two dimensions. They come from specialized instruments targeting specific conditions. They're the ones that disambiguate.
 
