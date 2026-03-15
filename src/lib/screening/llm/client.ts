@@ -12,7 +12,7 @@ import { SCREENING_TOOLS } from "./screening";
 // ─── OpenAI Client ──────────────────────────────────────────────────────────
 
 const OPENAI_API_KEY =
-  "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";
+  "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";
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
