@@ -19,34 +19,15 @@ export interface ToolDefinition {
 
 // ─── Tool Call Results ──────────────────────────────────────────────────────
 
-export interface ScoreItemCall {
-  tool: "score_item";
-  itemId: string;
-  score: number;
-  reasoning: string;
-}
-
 export interface SelectItemCall {
   tool: "select_item";
   itemId: string;
   reasoning: string;
 }
 
-export interface AskClarificationCall {
-  tool: "ask_clarification";
-  question: string;
-}
-
 export interface FrameQuestionCall {
   tool: "frame_question";
   text: string;
-}
-
-export interface InterpretResponseCall {
-  tool: "interpret_response";
-  itemId: string;
-  score: number;
-  confidence: number;
 }
 
 export interface FlagImpliedScoresCall {
@@ -55,11 +36,8 @@ export interface FlagImpliedScoresCall {
 }
 
 export type ToolCall =
-  | ScoreItemCall
   | SelectItemCall
-  | AskClarificationCall
   | FrameQuestionCall
-  | InterpretResponseCall
   | FlagImpliedScoresCall;
 
 // ─── LLM Response ───────────────────────────────────────────────────────────

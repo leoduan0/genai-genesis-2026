@@ -12,17 +12,25 @@ import { ScreeningItem } from "@/components/screening/screening-item";
 import type { ScreeningItemData } from "@/components/screening/screening-item";
 import { Spinner } from "@/components/ui/spinner";
 
+interface SelectedItemData {
+  itemId: string;
+  text: string;
+  responseMin: number;
+  responseMax: number;
+  responseLabels: Record<string, string>;
+}
+
 interface RespondResult {
   score: number | null;
-  impliedScores: { itemId: string; score: number; reasoning: string }[];
   nextQuestion: string | null;
   selectedItemId: string | null;
-  clarification?: string;
+  selectedItem: SelectedItemData | null;
   terminated: boolean;
   terminationReason: string | null;
   stage: string;
   itemsAdministered: number;
   estimatedTotal: number;
+  usedFallback: boolean;
 }
 
 export default function ScreeningChatPage() {
@@ -43,8 +51,7 @@ export default function ScreeningChatPage() {
   // Initialize from sessionStorage
   useEffect(() => {
     const sid = sessionStorage.getItem("screeningSessionId");
-    const firstQuestion = sessionStorage.getItem("screeningFirstQuestion");
-    const firstItemId = sessionStorage.getItem("screeningPendingItemId");
+    const firstItemRaw = sessionStorage.getItem("screeningFirstItem");
 
     if (!sid) {
       router.push("/patient/screening");
@@ -53,26 +60,30 @@ export default function ScreeningChatPage() {
 
     setSessionId(sid);
 
-    if (firstQuestion && firstItemId) {
-      const item = parseItemFromQuestion(firstQuestion, firstItemId);
+    if (firstItemRaw) {
+      const firstItem: SelectedItemData = JSON.parse(firstItemRaw);
+      const screeningItem: ScreeningItemData = {
+        itemId: firstItem.itemId,
+        text: firstItem.text,
+        responseMin: firstItem.responseMin,
+        responseMax: firstItem.responseMax,
+        responseLabels: firstItem.responseLabels,
+      };
+
       const assistantMsg: AssistantMessageData = {
         id: `asst-0`,
         text: "",
-        items: item ? [item] : undefined,
+        items: [screeningItem],
       };
 
       setMessages([{ type: "assistant", data: assistantMsg }]);
-      setPendingItemId(firstItemId);
-      if (item) {
-        setWaitingForItems(new Set([firstItemId]));
-      }
+      setPendingItemId(firstItem.itemId);
+      setWaitingForItems(new Set([firstItem.itemId]));
       setConversationHistory([
-        { role: "assistant", content: firstQuestion },
+        { role: "assistant", content: firstItem.text },
       ]);
 
-      // Clean up
-      sessionStorage.removeItem("screeningFirstQuestion");
-      sessionStorage.removeItem("screeningPendingItemId");
+      sessionStorage.removeItem("screeningFirstItem");
     }
   }, [router]);
 
@@ -164,7 +175,7 @@ export default function ScreeningChatPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            text: String(score),
+            score,
             pendingItemId: itemId,
             conversationHistory: history,
           }),
@@ -186,47 +197,31 @@ export default function ScreeningChatPage() {
         setConversationHistory(updatedHistory);
 
         if (data.terminated) {
-          // Redirect to report
           router.push("/patient/screening/report");
           return;
         }
 
-        if (data.clarification) {
-          // Show clarification as assistant message
-          setMessages((prev) => [
-            ...prev,
-            {
-              type: "assistant",
-              data: {
-                id: `asst-clarify-${Date.now()}`,
-                text: data.clarification!,
-              },
-            },
-          ]);
-          setProcessing(false);
-          return;
-        }
-
-        if (data.nextQuestion && data.selectedItemId) {
-          const nextItem = parseItemFromQuestion(
-            data.nextQuestion,
-            data.selectedItemId,
-          );
+        if (data.selectedItem) {
+          const nextItem: ScreeningItemData = {
+            itemId: data.selectedItem.itemId,
+            text: data.selectedItem.text,
+            responseMin: data.selectedItem.responseMin,
+            responseMax: data.selectedItem.responseMax,
+            responseLabels: data.selectedItem.responseLabels,
+          };
 
           const assistantMsg: AssistantMessageData = {
             id: `asst-${Date.now()}`,
             text: "",
-            items: nextItem ? [nextItem] : undefined,
+            items: [nextItem],
           };
 
           setMessages((prev) => [
             ...prev,
             { type: "assistant", data: assistantMsg },
           ]);
-          setPendingItemId(data.selectedItemId);
-          if (nextItem) {
-            setWaitingForItems(new Set([nextItem.itemId]));
-          }
+          setPendingItemId(data.selectedItem.itemId);
+          setWaitingForItems(new Set([data.selectedItem.itemId]));
         }
       } catch (err) {
         console.error("Failed to process response:", err);
@@ -296,51 +291,3 @@ export default function ScreeningChatPage() {
   );
 }
 
-/**
- * Parse a question string from the placeholder LLM into a ScreeningItemData.
- * The placeholder format is: "item text\n(0 = label, 1 = label, ...)"
- */
-function parseItemFromQuestion(
-  questionText: string,
-  itemId: string,
-): ScreeningItemData | null {
-  const lines = questionText.split("\n");
-
-  // Try to parse label line: "(0 = Not at all, 1 = Several days, ...)"
-  const labelLine = lines.find((l) => l.trim().startsWith("(") && l.includes("="));
-
-  // Item text is everything before the label line
-  const labelLineIdx = labelLine ? lines.indexOf(labelLine) : lines.length;
-  const text = lines.slice(0, labelLineIdx).join("\n").trim();
-  const responseLabels: Record<string, string> = {};
-  let responseMin = 0;
-  let responseMax = 3;
-
-  if (labelLine) {
-    const inner = labelLine.replace(/^\(/, "").replace(/\)$/, "").trim();
-    const parts = inner.split(",").map((s) => s.trim());
-    for (const part of parts) {
-      const eqIdx = part.indexOf("=");
-      if (eqIdx !== -1) {
-        const key = part.slice(0, eqIdx).trim();
-        const val = part.slice(eqIdx + 1).trim();
-        responseLabels[key] = val;
-      }
-    }
-    const keys = Object.keys(responseLabels).map(Number).filter(Number.isFinite);
-    if (keys.length > 0) {
-      responseMin = Math.min(...keys);
-      responseMax = Math.max(...keys);
-    }
-  }
-
-  if (!text) return null;
-
-  return {
-    itemId,
-    text,
-    responseMin,
-    responseMax,
-    responseLabels,
-  };
-}

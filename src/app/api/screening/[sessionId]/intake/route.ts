@@ -114,33 +114,73 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // Rank items for the first question
     const ranked = rankItems(state, referenceData, SCREENING_CONFIG);
 
-    // Get the first question via LLM
-    const firstQuestionResult = await callScreeningLLM({
-      systemPrompt: SCREENING_SYSTEM_PROMPT,
-      messages: [],
-      tools: SCREENING_TOOLS,
-      maxToolCalls: SCREENING_CONFIG.maxLlmToolCalls,
-      context: {
-        screeningState: state,
-        rankedItems: ranked,
-        conversationHistory: [{ role: "user", content: text }],
-        referenceData,
-      },
-    });
+    // Ask LLM to select + frame the first item
+    let firstQuestion: string | null = null;
+    let selectedItemId: string | null = null;
+    let selectedItem: { itemId: string; text: string; responseMin: number; responseMax: number; responseLabels: Record<string, string> } | null = null;
+    let usedFallback = false;
 
-    // Extract which item was selected
-    const selectedItemCall = firstQuestionResult.toolCalls.find(
-      (c) => c.tool === "select_item",
-    );
+    if (ranked.length > 0) {
+      const validItemIds = new Set(ranked.map((r) => r.itemId));
+
+      try {
+        const firstQuestionResult = await callScreeningLLM({
+          systemPrompt: SCREENING_SYSTEM_PROMPT,
+          messages: [],
+          tools: SCREENING_TOOLS,
+          maxToolCalls: SCREENING_CONFIG.maxLlmToolCalls,
+          context: {
+            screeningState: state,
+            rankedItems: ranked,
+            conversationHistory: [{ role: "user", content: text }],
+            referenceData,
+          },
+        });
+
+        const selectCall = firstQuestionResult.toolCalls.find(
+          (c) => c.tool === "select_item",
+        );
+        if (selectCall && selectCall.tool === "select_item" && validItemIds.has(selectCall.itemId)) {
+          selectedItemId = selectCall.itemId;
+          firstQuestion = firstQuestionResult.message;
+        }
+      } catch (err) {
+        console.error("[LLM ERROR] first question:", err);
+      }
+
+      // Fallback: algo top pick
+      if (!selectedItemId) {
+        usedFallback = true;
+        selectedItemId = ranked[0].itemId;
+        firstQuestion = ranked[0].item.text;
+      }
+
+      // Build item metadata from reference data
+      const itemRef = referenceData.items.find((i) => i.id === selectedItemId);
+      if (itemRef) {
+        selectedItem = {
+          itemId: itemRef.id,
+          text: firstQuestion || itemRef.text,
+          responseMin: itemRef.responseMin,
+          responseMax: itemRef.responseMax,
+          responseLabels: itemRef.responseLabels,
+        };
+        if (usedFallback) {
+          selectedItem.text += "\n\n*_Item selected by algorithm._*";
+        }
+      }
+    }
 
     await updateSessionState(sessionId, state);
 
     return NextResponse.json({
       autoScoredCount: impliedScores.length,
-      firstQuestion: firstQuestionResult.message,
-      selectedItemId: selectedItemCall && "itemId" in selectedItemCall ? selectedItemCall.itemId : null,
+      firstQuestion,
+      selectedItemId,
+      selectedItem,
       stage: state.stage,
       itemsAdministered: state.itemsAdministered.length,
+      usedFallback,
     });
   } catch (error) {
     console.error("Failed to process intake:", error);

@@ -218,9 +218,6 @@ describe("LLM Intake Integration", () => {
     // At minimum, "feeling sad and hopeless" should map to phq9_2
     expect(scoredIds).toContain("phq9_2");
 
-    // Should have a message
-    expect(result.message).toBeTruthy();
-    expect(result.message.length).toBeGreaterThan(0);
   }, TIMEOUT);
 
   it("should return flag_implied_scores for an anxiety concern", async () => {
@@ -262,7 +259,7 @@ describe("LLM Intake Integration", () => {
     expect(gad1Score!.score).toBeGreaterThanOrEqual(2);
   }, TIMEOUT);
 
-  it("should return a compassionate message", async () => {
+  it("should score items for anhedonia/emptiness", async () => {
     const refData = buildTestReferenceData();
     const state = buildTestState();
 
@@ -283,15 +280,17 @@ describe("LLM Intake Integration", () => {
       },
     });
 
-    // Message should exist and not be clinical/cold
-    expect(result.message).toBeTruthy();
-    expect(result.message.length).toBeGreaterThan(10);
-    // Should not contain diagnostic language
-    expect(result.message.toLowerCase()).not.toContain("you have");
-    expect(result.message.toLowerCase()).not.toContain("diagnosed");
+    // Should score phq9_1 (anhedonia)
+    const impliedCalls = result.toolCalls.filter(
+      (tc): tc is Extract<ToolCall, { tool: "flag_implied_scores" }> =>
+        tc.tool === "flag_implied_scores",
+    );
+    expect(impliedCalls.length).toBeGreaterThan(0);
+    const scoredIds = impliedCalls.flatMap((c) => c.scores).map((s) => s.itemId);
+    expect(scoredIds).toContain("phq9_1");
   }, TIMEOUT);
 
-  it("should handle vague/minimal input gracefully", async () => {
+  it("should handle vague/minimal input without crashing", async () => {
     const refData = buildTestReferenceData();
     const state = buildTestState();
 
@@ -312,8 +311,8 @@ describe("LLM Intake Integration", () => {
       },
     });
 
-    // Should still return a response (maybe fewer scores or none due to vagueness)
-    expect(result.message).toBeTruthy();
-    // Should not crash or error
+    // Should not crash — may or may not have tool calls for vague input
+    expect(result).toBeDefined();
+    expect(result.toolCalls).toBeDefined();
   }, TIMEOUT);
 });

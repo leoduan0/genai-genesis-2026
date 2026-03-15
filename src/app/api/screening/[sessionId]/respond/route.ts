@@ -21,26 +21,25 @@ type RouteParams = { params: Promise<{ sessionId: string }> };
 /**
  * POST /api/screening/[sessionId]/respond
  *
- * Phase 1 & 2: Accept patient response, run LLM interpretation,
- * apply Kalman updates, check termination, return next question.
+ * Phase 1 & 2: Accept Likert score from the patient, apply Kalman update,
+ * check termination, then ask the LLM to select + frame the next item.
  *
- * Body: { text: string, pendingItemId: string, conversationHistory: Message[] }
- * Returns: { score, impliedScores[], nextQuestion, selectedItemId, terminated, terminationReason, stage, itemsAdministered, estimatedTotal }
+ * Body: { score: number, pendingItemId: string, conversationHistory: Message[] }
+ * Returns: { score, nextQuestion, selectedItemId, terminated, terminationReason, stage, itemsAdministered, estimatedTotal, usedFallback }
  */
 export async function POST(request: NextRequest, { params }: RouteParams) {
   try {
     const { sessionId } = await params;
     const body = await request.json();
-    const { text, pendingItemId, conversationHistory = [] } = body;
+    const { score: rawScore, pendingItemId, conversationHistory = [] } = body;
 
-    if (!text || typeof text !== "string") {
-      return NextResponse.json({ error: "text is required" }, { status: 400 });
+    if (rawScore === undefined || rawScore === null || typeof rawScore !== "number") {
+      return NextResponse.json({ error: "score is required (number)" }, { status: 400 });
     }
     if (!pendingItemId || typeof pendingItemId !== "string") {
       return NextResponse.json({ error: "pendingItemId is required" }, { status: 400 });
     }
 
-    // Single DB fetch — reuse for both session metadata and state reconstruction
     const session = await getSession(sessionId);
     if (session.stage !== "BROAD_SCREENING" && session.stage !== "TARGETED") {
       return NextResponse.json(
@@ -53,7 +52,6 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       session.populationType as PopulationType,
     );
 
-    // Reconstruct state from the already-fetched session (avoid second DB query)
     let state = reconstructState(session);
 
     // Use persisted initial trace, or compute and persist on first call
@@ -65,25 +63,13 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       await saveInitialTrace(sessionId, initialTrace);
     }
 
-    // Build messages for LLM
-    const messages: Message[] = [
-      ...conversationHistory.map((m: Message) => ({ role: m.role, content: m.content })),
-      { role: "user" as const, content: text },
-    ];
-
-    // Parse score from patient response (inline — skip first LLM call for placeholder)
-    let score: number | null = null;
-    const scoreMatch = text.match(/\d+/);
-    if (scoreMatch) {
-      score = parseInt(scoreMatch[0], 10);
-    }
-
-    const impliedScores: { itemId: string; score: number; reasoning: string }[] = [];
-
-    // Validate and apply score for the pending item
+    // ── Apply the Likert score directly ──
     const pendingItem = referenceData.items.find((i) => i.id === pendingItemId);
-    if (score !== null && pendingItem) {
-      score = Math.max(pendingItem.responseMin, Math.min(pendingItem.responseMax, Math.round(score)));
+    const score = pendingItem
+      ? Math.max(pendingItem.responseMin, Math.min(pendingItem.responseMax, Math.round(rawScore)))
+      : Math.round(rawScore);
+
+    if (pendingItem) {
       const normalized = normalizeResponse(score, pendingItem.responseMin, pendingItem.responseMax, pendingItem.normativeMean, pendingItem.normativeSD, pendingItem.normativeResponseDist, pendingItem.isReverseCoded);
 
       const result = kalmanUpdate(state, pendingItemId, normalized, referenceData);
@@ -105,7 +91,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // Check termination / stage transition
+    // ── Check termination / stage transition ──
     let terminated = false;
     let terminationReason: string | null = null;
 
@@ -116,14 +102,6 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }
     } else if (state.stage === "TARGETED") {
       const termCheck = checkStageTwoTermination(state, referenceData, SCREENING_CONFIG);
-      console.log("[STAGE2 TERM]", {
-        shouldTerminate: termCheck.shouldTerminate,
-        reason: termCheck.reason,
-        stageTwoItems: state.itemsAdministered.filter(a => a.stage === "TARGETED").length,
-        conditionCount: state.conditionDimensionOrder?.length,
-        flaggedConditions: state.flaggedConditions?.length,
-        maxVar: state.conditionVariances ? Math.max(...state.conditionVariances) : null,
-      });
       if (termCheck.shouldTerminate) {
         terminated = true;
         terminationReason = termCheck.reason;
@@ -132,59 +110,67 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    // Rank next items and get next question (if not terminated)
+    // ── LLM selects + frames the next item ──
     let nextQuestion: string | null = null;
     let selectedItemId: string | null = null;
+    let selectedItem: { itemId: string; text: string; responseMin: number; responseMax: number; responseLabels: Record<string, string> } | null = null;
+    let usedFallback = false;
 
     if (!terminated) {
       const nextRanked = rankItems(state, referenceData, SCREENING_CONFIG);
 
-      if (state.stage === "TARGETED" || state.stage === "BROAD_SCREENING") {
-        console.log("[RANK]", {
-          stage: state.stage,
-          candidates: nextRanked.length,
-          top3: nextRanked.slice(0, 3).map(r => ({
-            id: r.itemId.slice(0, 8),
-            evr: r.expectedVarianceReduction.toFixed(6),
-            tier: r.item.tier,
-            loadings: (referenceData.itemLoadingsByItem.get(r.itemId) ?? []).map(l => ({
-              dim: l.dimensionId.slice(0, 8),
-              isCondition: referenceData.conditionIndex.has(l.dimensionId),
-              loading: l.loading,
-            })),
-          })),
-        });
-      }
       if (nextRanked.length === 0) {
-        console.log("[STAGE2 NO ITEMS]", {
-          stage: state.stage,
-          flaggedConditions: state.flaggedConditions,
-          totalCandidates: referenceData.items.length,
-          administered: state.itemsAdministered.length,
-        });
         terminated = true;
         terminationReason = "no_items_remaining";
         state.stage = "COMPLETE";
         await endSession(sessionId, "NO_INFO_GAIN");
       } else {
-        // Use single LLM call — it both selects the item and frames the question
-        const nextResult = await callScreeningLLM({
-          systemPrompt: SCREENING_SYSTEM_PROMPT,
-          messages,
-          tools: SCREENING_TOOLS,
-          maxToolCalls: SCREENING_CONFIG.maxLlmToolCalls,
-          context: {
-            screeningState: state,
-            rankedItems: nextRanked,
-            conversationHistory: messages,
-            referenceData,
-          },
-        });
+        const validItemIds = new Set(nextRanked.map((r) => r.itemId));
 
-        nextQuestion = nextResult.message;
-        const selectCall = nextResult.toolCalls.find((c) => c.tool === "select_item");
-        if (selectCall && selectCall.tool === "select_item") {
-          selectedItemId = selectCall.itemId;
+        // Ask LLM to pick + frame the next item
+        try {
+          const llmResult = await callScreeningLLM({
+            systemPrompt: SCREENING_SYSTEM_PROMPT,
+            messages: conversationHistory.map((m: Message) => ({ role: m.role, content: m.content })),
+            tools: SCREENING_TOOLS,
+            maxToolCalls: SCREENING_CONFIG.maxLlmToolCalls,
+            context: {
+              screeningState: state,
+              rankedItems: nextRanked,
+              conversationHistory: conversationHistory.map((m: Message) => ({ role: m.role, content: m.content })),
+              referenceData,
+            },
+          });
+
+          const selectCall = llmResult.toolCalls.find((c) => c.tool === "select_item");
+          if (selectCall && selectCall.tool === "select_item" && validItemIds.has(selectCall.itemId)) {
+            selectedItemId = selectCall.itemId;
+            nextQuestion = llmResult.message;
+          }
+        } catch (err) {
+          console.error("[LLM ERROR]", err);
+        }
+
+        // Fallback: algo top pick
+        if (!selectedItemId) {
+          usedFallback = true;
+          selectedItemId = nextRanked[0].itemId;
+          nextQuestion = nextRanked[0].item.text;
+        }
+
+        // Build item metadata from reference data
+        const itemRef = referenceData.items.find((i) => i.id === selectedItemId);
+        if (itemRef) {
+          selectedItem = {
+            itemId: itemRef.id,
+            text: nextQuestion || itemRef.text,
+            responseMin: itemRef.responseMin,
+            responseMax: itemRef.responseMax,
+            responseLabels: itemRef.responseLabels,
+          };
+          if (usedFallback) {
+            selectedItem.text += "\n\n*_Item selected by algorithm._*";
+          }
         }
       }
     }
@@ -193,18 +179,15 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     return NextResponse.json({
       score,
-      impliedScores: impliedScores.map((s) => ({
-        itemId: s.itemId,
-        score: s.score,
-        reasoning: s.reasoning,
-      })),
       nextQuestion,
       selectedItemId,
+      selectedItem,
       terminated,
       terminationReason,
       stage: state.stage,
       itemsAdministered: state.itemsAdministered.length,
       estimatedTotal: estimateTotal(state),
+      usedFallback,
     });
   } catch (error) {
     console.error("Failed to process response:", error);

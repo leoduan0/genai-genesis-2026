@@ -12,7 +12,7 @@ import { SCREENING_TOOLS } from "./screening";
 // ─── OpenAI Client ──────────────────────────────────────────────────────────
 
 const OPENAI_API_KEY =
-  "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";
+  "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";
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
@@ -39,36 +39,111 @@ function buildContextBlock(options: ScreeningLLMOptions): string {
   const { context } = options;
   const parts: string[] = [];
 
-  parts.push(`\n## Current screening state`);
-  parts.push(`Stage: ${context.screeningState.stage}`);
-  parts.push(
-    `Items administered: ${context.screeningState.itemsAdministered.length}`,
-  );
-  parts.push(
-    `Auto-scored items: ${context.screeningState.autoScoredItems.length}`,
-  );
+  const st = context.screeningState;
 
-  if (context.screeningState.flaggedSpectra.length > 0) {
-    parts.push(
-      `Flagged spectra: ${context.screeningState.flaggedSpectra.join(", ")}`,
-    );
+  parts.push(`\n## Current screening state`);
+  parts.push(`Stage: ${st.stage}`);
+  parts.push(`Items administered: ${st.itemsAdministered.length}`);
+  parts.push(`Auto-scored items: ${st.autoScoredItems.length}`);
+
+  if (st.flaggedSpectra.length > 0) {
+    parts.push(`Flagged spectra: ${st.flaggedSpectra.join(", ")}`);
   }
 
-  // Include ranked items so the LLM knows what to pick from
+  // ── Intake context (what the patient originally said) ──
+  if (context.conversationHistory.length > 0) {
+    const intakeMsg = context.conversationHistory.find(
+      (m) => m.role === "user",
+    );
+    if (intakeMsg) {
+      parts.push(`\n## Patient's initial concern`);
+      parts.push(intakeMsg.content);
+    }
+  }
+
+  // ── Previously administered items with responses ──
+  if (st.itemsAdministered.length > 0) {
+    parts.push(`\n## Previously asked items (most recent last)`);
+    const recent = st.itemsAdministered.slice(-10); // last 10 to avoid bloat
+    for (const admin of recent) {
+      const item = context.referenceData.items.find(
+        (i) => i.id === admin.itemId,
+      );
+      if (item) {
+        const label =
+          item.responseLabels[String(admin.response)] ?? String(admin.response);
+        parts.push(
+          `- "${item.text}" → ${admin.response} (${label}) [${admin.stage}]`,
+        );
+      }
+    }
+  }
+
+  // ── Current spectrum estimates ──
+  if (st.spectrumMean.length > 0) {
+    parts.push(`\n## Current spectrum estimates (z-scores)`);
+    for (let i = 0; i < context.referenceData.spectra.length; i++) {
+      const spec = context.referenceData.spectra[i];
+      if (i < st.spectrumMean.length) {
+        const mean = st.spectrumMean[i];
+        const variance = st.spectrumCovariance[i]?.[i] ?? 1;
+        const label =
+          mean > 1.5
+            ? "very high"
+            : mean > 0.8
+              ? "high"
+              : mean > 0.3
+                ? "moderate"
+                : "low";
+        parts.push(
+          `- ${spec.name} (${spec.shortCode}): μ=${mean.toFixed(2)}, σ²=${variance.toFixed(2)} → ${label}`,
+        );
+      }
+    }
+  }
+
+  // ── Current condition probabilities (stage 2 only) ──
+  if (st.conditionMean && st.conditionVariances && st.conditionDimensionOrder) {
+    parts.push(`\n## Current condition probabilities`);
+    for (let i = 0; i < st.conditionDimensionOrder.length; i++) {
+      const condId = st.conditionDimensionOrder[i];
+      const cond = context.referenceData.conditions.find(
+        (c) => c.id === condId,
+      );
+      if (cond && i < st.conditionMean.length) {
+        const mean = st.conditionMean[i];
+        const variance = st.conditionVariances[i];
+        const threshold = context.referenceData.thresholds.find(
+          (t) => t.dimensionId === condId,
+        );
+        const tau = threshold ? threshold.thresholdLiability : 1.5;
+        // P = 1 - Phi((tau - mu) / sqrt(var))
+        const z = (tau - mean) / Math.sqrt(variance);
+        const prob = 1 - approxPhi(z);
+        parts.push(
+          `- ${cond.name} (${cond.shortCode}): P=${(prob * 100).toFixed(0)}%, μ=${mean.toFixed(2)}, σ²=${variance.toFixed(2)}`,
+        );
+      }
+    }
+  }
+
+  // ── Ranked items (the algorithm's recommendation) ──
   if (context.rankedItems && context.rankedItems.length > 0) {
-    parts.push(`\n## Available items to ask (ranked by information gain)`);
+    parts.push(
+      `\n## Algorithm-ranked items (by expected variance reduction)`,
+    );
+    parts.push(
+      `You MUST call select_item with one of these itemIds. Use your holistic judgment to pick the best one, considering conversational flow, the patient's concerns, and the algorithm's ranking.`,
+    );
     for (const ri of context.rankedItems) {
       parts.push(
-        `- itemId: "${ri.itemId}" | text: "${ri.item.text}" | response range: ${ri.item.responseMin}-${ri.item.responseMax} | labels: ${JSON.stringify(ri.item.responseLabels)} | expected variance reduction: ${ri.expectedVarianceReduction.toFixed(4)}`,
+        `- itemId: "${ri.itemId}" | text: "${ri.item.text}" | range: ${ri.item.responseMin}-${ri.item.responseMax} | labels: ${JSON.stringify(ri.item.responseLabels)} | expected variance reduction: ${ri.expectedVarianceReduction.toFixed(4)}`,
       );
     }
   }
 
-  // Include available items for intake auto-scoring
-  if (
-    context.screeningState.stage === "INTAKE" &&
-    context.referenceData.items.length > 0
-  ) {
+  // ── Available items for intake auto-scoring ──
+  if (st.stage === "INTAKE" && context.referenceData.items.length > 0) {
     parts.push(
       `\n## Available screening items (use these IDs for flag_implied_scores)`,
     );
@@ -77,7 +152,9 @@ function buildContextBlock(options: ScreeningLLMOptions): string {
         .filter((l) => l.itemId === item.id)
         .map((l) => {
           const dim =
-            context.referenceData.spectra.find((s) => s.id === l.dimensionId) ??
+            context.referenceData.spectra.find(
+              (s) => s.id === l.dimensionId,
+            ) ??
             context.referenceData.conditions.find(
               (c) => c.id === l.dimensionId,
             );
@@ -90,9 +167,9 @@ function buildContextBlock(options: ScreeningLLMOptions): string {
     }
   }
 
-  // Already administered/scored items
-  const adminIds = context.screeningState.itemsAdministered.map((i) => i.itemId);
-  const autoIds = context.screeningState.autoScoredItems.map((i) => i.itemId);
+  // ── Already scored (do not re-ask) ──
+  const adminIds = st.itemsAdministered.map((i) => i.itemId);
+  const autoIds = st.autoScoredItems.map((i) => i.itemId);
   const allScoredIds = Array.from(new Set(adminIds.concat(autoIds)));
   if (allScoredIds.length > 0) {
     parts.push(
@@ -101,6 +178,19 @@ function buildContextBlock(options: ScreeningLLMOptions): string {
   }
 
   return parts.join("\n");
+}
+
+/** Fast Φ(x) approximation for context block probability display. */
+function approxPhi(x: number): number {
+  if (x < -8) return 0;
+  if (x > 8) return 1;
+  const t = 1 / (1 + 0.2316419 * Math.abs(x));
+  const d = 0.3989422804014327; // 1/sqrt(2π)
+  const p =
+    d *
+    Math.exp((-x * x) / 2) *
+    (t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429)))));
+  return x >= 0 ? 1 - p : p;
 }
 
 // ─── Parse tool calls from OpenAI response ──────────────────────────────────
@@ -116,14 +206,6 @@ function parseToolCalls(
     const name = fnCall.function.name;
 
     switch (name) {
-      case "score_item":
-        result.push({
-          tool: "score_item",
-          itemId: args.itemId,
-          score: args.score,
-          reasoning: args.reasoning,
-        });
-        break;
       case "select_item":
         result.push({
           tool: "select_item",
@@ -131,19 +213,8 @@ function parseToolCalls(
           reasoning: args.reasoning,
         });
         break;
-      case "ask_clarification":
-        result.push({ tool: "ask_clarification", question: args.question });
-        break;
       case "frame_question":
         result.push({ tool: "frame_question", text: args.text });
-        break;
-      case "interpret_response":
-        result.push({
-          tool: "interpret_response",
-          itemId: args.itemId,
-          score: args.score,
-          confidence: args.confidence,
-        });
         break;
       case "flag_implied_scores":
         result.push({ tool: "flag_implied_scores", scores: args.scores });
@@ -191,17 +262,9 @@ export async function callScreeningLLM(
     ? parseToolCalls(msg.tool_calls)
     : [];
 
-  // Extract message text — if the LLM only made tool calls, build message from frame_question
-  let message = msg.content ?? "";
-  if (!message) {
-    const framed = toolCalls.find((tc) => tc.tool === "frame_question");
-    if (framed && "text" in framed) {
-      message = framed.text;
-    } else {
-      message =
-        "Thank you for sharing. Let me ask you a few specific questions to understand better.";
-    }
-  }
+  // Extract message: prefer frame_question tool call > LLM content > empty
+  const framed = toolCalls.find((tc) => tc.tool === "frame_question");
+  let message = framed && "text" in framed ? framed.text : (msg.content ?? "");
 
   return { message, toolCalls };
 }

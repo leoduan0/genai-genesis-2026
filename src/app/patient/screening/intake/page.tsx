@@ -36,10 +36,9 @@ export default function ScreeningIntakePage() {
 
       setAutoScoredCount(data.autoScoredCount);
 
-      // Store first question for chat page
-      sessionStorage.setItem("screeningFirstQuestion", data.firstQuestion);
-      if (data.selectedItemId) {
-        sessionStorage.setItem("screeningPendingItemId", data.selectedItemId);
+      // Store first item for chat page
+      if (data.selectedItem) {
+        sessionStorage.setItem("screeningFirstItem", JSON.stringify(data.selectedItem));
       }
 
       setPhase("transition");
