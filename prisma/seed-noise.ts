@@ -9,7 +9,7 @@
 //
 // Sources documented per instrument below.
 
-import type { SourceQuality } from "../generated/prisma/client";
+import type { SourceQuality } from "../src/generated/prisma/client";
 
 type NoiseEntry = {
   /** Test-retest reliability coefficient */

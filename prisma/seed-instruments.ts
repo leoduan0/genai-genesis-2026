@@ -5,7 +5,7 @@
 // Tier 2 (Targeted): PCL-5, Y-BOCS, CAPE-42, AUDIT, DAST-10, MDQ, ASRS, SPIN, PQ-16, PHQ-Panic,
 //   SPQ-B, AQ-10, CDS-2, PID-5-BF, WI-7, HRS-SR, BDDQ, SCOFF, BEDS-7, PGSI, HCL-32
 
-import type { ContentTag, InstrumentTier } from "../generated/prisma/client";
+import type { ContentTag, InstrumentTier } from "../src/generated/prisma/client";
 
 type ItemDef = {
   itemNumber: number;

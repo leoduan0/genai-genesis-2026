@@ -1,6 +1,5 @@
-import pg from "pg";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "../generated/prisma/client";
+import { PrismaClient } from "../src/generated/prisma/client";
 import "dotenv/config";
 import { instruments } from "./seed-instruments";
 import { overlaps } from "./seed-overlaps";
@@ -8,8 +7,8 @@ import { itemLoadings } from "./seed-loadings";
 import { instrumentNoiseData, getItemNoise } from "./seed-noise";
 import { thresholds } from "./seed-thresholds";
 
-const pool = new pg.Pool({ connectionString: process.env.DIRECT_URL });
-const adapter = new PrismaPg(pool);
+const connectionString = `${process.env.DIRECT_URL}`;
+const adapter = new PrismaPg({ connectionString });
 const prisma = new PrismaClient({ adapter });
 
 // ─── 8 Spectra ───────────────────────────────────────────────────────────────
@@ -1505,7 +1504,7 @@ async function main() {
   console.log("Seeding spectra...");
 
   // Create spectra
-  const spectraMap = {};
+  const spectraMap: Record<string, string> = {};
   for (const s of spectra) {
     const dim = await prisma.dimension.upsert({
       where: { shortCode: s.shortCode },
@@ -1518,7 +1517,7 @@ async function main() {
 
   // Create conditions
   console.log("Seeding conditions...");
-  const conditionMap = {};
+  const conditionMap: Record<string, string> = {};
   for (const c of conditions) {
     const dim = await prisma.dimension.upsert({
       where: { shortCode: c.shortCode },
@@ -1969,4 +1968,4 @@ async function main() {
 
 main()
   .catch((e) => { console.error(e); process.exit(1); })
-  .finally(() => { prisma.$disconnect(); pool.end(); });
+  .finally(() => { prisma.$disconnect(); });

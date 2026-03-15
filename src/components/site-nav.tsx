@@ -13,6 +13,10 @@ type NavUser = {
   role?: string | null
 }
 
+function normalizeRole(role: unknown) {
+  return typeof role === "string" ? role.toLowerCase() : null
+}
+
 export function SiteNav() {
   const [user, setUser] = useState<NavUser | null>(null)
   const [isSigningOut, startSigningOut] = useTransition()
@@ -27,7 +31,7 @@ export function SiteNav() {
         authUser
           ? {
               email: authUser.email,
-              role: authUser.user_metadata?.role,
+              role: normalizeRole(authUser.user_metadata?.role),
             }
           : null,
       )
@@ -41,7 +45,7 @@ export function SiteNav() {
         authUser
           ? {
               email: authUser.email,
-              role: authUser.user_metadata?.role,
+              role: normalizeRole(authUser.user_metadata?.role),
             }
           : null,
       )

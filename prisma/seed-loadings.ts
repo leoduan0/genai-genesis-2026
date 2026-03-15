@@ -12,7 +12,7 @@
 // Instrument-to-dimension mappings derived from Wendt et al. (2023, N=909) HiTOP
 // alignment study, supplemented by HiTOP structural papers (Kotov et al. 2017, 2021).
 
-import type { DerivationMethod, SourceQuality } from "../generated/prisma/client";
+import type { DerivationMethod, SourceQuality } from "../src/generated/prisma/client";
 
 type Source = { citation: string; n: number | null; value: number | null };
 

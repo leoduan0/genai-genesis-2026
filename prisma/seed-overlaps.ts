@@ -13,7 +13,7 @@
 // Convention: itemA instrument is alphabetically/ordinally before itemB instrument
 // within a tier, and Tier 1 instruments come before Tier 2 instruments.
 
-import type { ContentTag, OverlapStrength } from "../generated/prisma/client";
+import type { ContentTag, OverlapStrength } from "../src/generated/prisma/client";
 
 export type OverlapDef = {
   instrumentA: string;
