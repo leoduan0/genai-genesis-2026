@@ -136,6 +136,7 @@ model Dimension {
   baseRates                 BaseRate[]
   clinicalThresholds        ClinicalThreshold[]
   itemLoadings              ItemLoading[]
+  sessionDiagnoses          SessionDiagnosis[]
 
   @@index([level])
 }
@@ -219,6 +220,7 @@ model Item {
   loadings         ItemLoading[]
   overlapsA        ItemOverlap[]     @relation("OverlapItemA")
   overlapsB        ItemOverlap[]     @relation("OverlapItemB")
+  sessionResponses SessionResponse[]
 
   @@unique([instrumentId, itemNumber])
 }
@@ -272,6 +274,98 @@ model ClinicalThreshold {
 }
 
 
+// ─── Screening Session Data (Dynamic) ─────────────────────────────────────
+
+enum ScreeningStage {
+  INTAKE
+  BROAD_SCREENING
+  TARGETED
+  COMPLETE
+}
+
+enum TerminationReason {
+  CONFIDENCE_MET
+  NO_INFO_GAIN
+  MAX_ITEMS
+  USER_STOPPED
+}
+
+model ScreeningSession {
+  id                          String              @id @default(cuid())
+  patientId                   String
+  populationType              PopulationType
+
+  stage                       ScreeningStage      @default(INTAKE)
+
+  // Stage 1: spectrum-level posteriors
+  spectrumPriorMean           Float[]
+  spectrumPriorCovariance     Json                // 2D array (N×N)
+  spectrumPosteriorMean       Float[]             @default([])
+  spectrumPosteriorCovariance Json?               // 2D array (N×N), null until first item
+
+  // Stage 2: condition-level posteriors (diagonal — independent given spectrum)
+  conditionPriorMean          Float[]             @default([])
+  conditionPosteriorMean      Float[]             @default([])
+  conditionPosteriorVariances Float[]             @default([])
+  conditionDimensionOrder     String[]            @default([])
+
+  // Metadata
+  itemsAdministered           Int                 @default(0)
+  stageTransitionAt           DateTime?
+  terminated                  Boolean             @default(false)
+  terminationReason           TerminationReason?
+  startedAt                   DateTime            @default(now())
+  completedAt                 DateTime?
+
+  patient                     Patient             @relation(fields: [patientId], references: [id])
+  responses                   SessionResponse[]
+  diagnoses                   SessionDiagnosis[]
+
+  @@index([patientId])
+  @@map("screening_session")
+}
+
+model SessionResponse {
+  id                    String           @id @default(cuid())
+  sessionId             String
+  itemId                String
+  responseRaw           Int
+  responseNormalized    Float
+  administrationOrder   Int
+  stage                 ScreeningStage
+  kalmanGain            Float[]
+  posteriorMeanAfter    Float[]
+  posteriorDiagAfter    Float[]
+  runtimeNoiseVariance  Float
+  infoGain              Float
+  respondedAt           DateTime         @default(now())
+
+  session               ScreeningSession @relation(fields: [sessionId], references: [id])
+  item                  Item             @relation(fields: [itemId], references: [id])
+
+  @@index([sessionId, administrationOrder])
+  @@map("session_response")
+}
+
+model SessionDiagnosis {
+  id            String           @id @default(cuid())
+  sessionId     String
+  dimensionId   String
+  liability     Float
+  uncertainty   Float
+  threshold     Float
+  probability   Float
+  flagged       Boolean
+
+  session       ScreeningSession @relation(fields: [sessionId], references: [id])
+  dimension     Dimension        @relation(fields: [dimensionId], references: [id])
+
+  @@unique([sessionId, dimensionId])
+  @@map("session_diagnosis")
+}
+
+// ─── User & Auth ──────────────────────────────────────────────────────────
+
 enum ROLES {
   DOCTOR
   PATIENT
@@ -315,8 +409,9 @@ model Patient {
   gender          GENDER
   doctorId        String?          @map("doctor_id")
   doctor          Doctor?          @relation(fields: [doctorId], references: [id])
-  chatSessions    ChatSession[]
-  therapySessions TherapySession[]
+  chatSessions       ChatSession[]
+  therapySessions    TherapySession[]
+  screeningSessions  ScreeningSession[]
 
   user   User   @relation(fields: [userId], references: [id])
   userId String @unique @map("user_id")

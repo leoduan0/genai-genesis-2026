@@ -1,0 +1,75 @@
+# Screening Implementation Progress
+
+Tracks implementation of the Bayesian adaptive screening flow. See `SCREENING_PLAN.md` for full details and `SCREENING_UI_SKELETON.md` for UI structure.
+
+---
+
+## Step 1: Core Math Engine (`src/lib/screening/`)
+
+- [x] **1a** Configuration — `SCREENING_CONFIG` with all tunable thresholds in `config.ts`
+- [x] **1b** State representation — `ScreeningState` type, `initState()` (no hardcoded dimension counts) — types in `types.ts`, init in `state.ts`
+- [x] **1c** Kalman update — `kalmanUpdate()`, `batchUpdate()`, runtime noise — `update.ts` (spectrum + condition level)
+- [x] **1d** Item selection — `rankItems()`, expected variance reduction — `selection.ts`
+- [x] **1e** Stage transition — termination criteria, `transitionToStageTwo()` with correct variance init (Σ = λ²Σ_spectrum + (1−λ²)) — `transition.ts`
+- [x] **1f** Diagnosis computation — `computeProbability()`, `classifyCondition()` (thresholds from config), stage 2 termination — `diagnosis.ts`
+
+## Step 2: Data Loading Layer (`src/lib/screening/data.ts`)
+
+- [x] `loadFullReferenceData()` — spectra, conditions, correlations, base rates, items, loadings, overlaps, thresholds — `loadData.ts`
+
+## Step 3: LLM Integration (`src/lib/screening/llm/`)
+
+- [ ] **3a** LLM client (`client.ts`) — placeholder wrapper, same interface as real LLM
+- [ ] **3b** General screening function (`screening.ts`) — one function, editable prompt, tools (score_item, select_item, ask_clarification, frame_question, interpret_response, flag_implied_scores)
+- [ ] **3c** Report generation (`report.ts`) — separate editable prompt, structured output
+- [ ] **3d** Placeholder behavior — verbatim items, direct scoring, template report
+
+## Step 4: API Routes (`src/app/api/screening/`)
+
+- [ ] **4a** `POST /start`, `GET /[id]`, `POST /[id]/end`
+- [ ] **4b** `POST /[id]/intake` — free-text processing
+- [ ] **4c** `POST /[id]/respond` — main screening loop
+- [ ] **4d** `GET /[id]/report`
+- [ ] **4e** `POST /[id]/followup`
+
+## Step 5: Database Session Persistence
+
+- [x] **5a** Add `ScreeningSession`, `SessionResponse`, `SessionDiagnosis` to Prisma schema + `db push`
+- [x] **5b** Persistence functions — create/save/load session state — `persistence.ts`
+
+## Step 6: Patient Screening UI (`/patient/screening/`)
+
+- [ ] **6a** Entry point — begin screening, population selector, past screenings
+- [ ] **6b** Phase 0: Free-text intake — textarea, loading state, transition screen
+- [ ] **6c** Phase 1 & 2: Conversational chat — message thread, progress bar, sidebar
+- [ ] **6d** Phase 3: Report — dimensional profile, flagged conditions, talking points, not-assessed
+- [ ] **6e** Phase 4: Follow-up — Q&A chat about the report
+
+## Step 7: Doctor Review UI
+
+- [ ] **7a** Screening sessions on patient detail page
+- [ ] **7b** Screening detail view — audit trail, posterior evolution, clinical notes
+
+## Step 8: Testing & Validation
+
+- [ ] **8a** Math engine unit tests (including threshold sensitivity tests)
+- [ ] **8b** Integration tests (full flow with mock LLM)
+- [ ] **8c** LLM output validation tests
+
+## Step 9: Polish & Edge Cases
+
+- [ ] Session resumption
+- [ ] Session timeout + auto-save
+- [ ] LLM fallback (show items verbatim if LLM fails)
+- [ ] Accessibility (screen reader, keyboard nav)
+- [ ] Mobile responsiveness
+- [ ] Rate limiting + input sanitization
+
+## Step 10: Guardrails & Crisis Intervention (LAST)
+
+- [ ] **10a** Crisis item detection — configurable item/tag list, response thresholds
+- [ ] **10b** Psychotic symptom detection — configurable item list
+- [ ] **10c** LLM-based crisis language detection — `flag_crisis` tool
+- [ ] **10d** Crisis UI overlay — non-dismissable modal, 988/crisis resources
+- [ ] **10e** Clinical referral flags — badges on doctor dashboard
+- [ ] **10f** Language guardrails — "your responses suggest" not "you have"
