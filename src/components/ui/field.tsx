@@ -1,10 +1,10 @@
-import type { HTMLAttributes, ReactNode } from "react"
+import type { HTMLAttributes, LabelHTMLAttributes, ReactNode } from "react"
 
 import { cn } from "@/lib/utils"
 
 type FieldProps = HTMLAttributes<HTMLDivElement>
 
-type FieldLabelProps = HTMLAttributes<HTMLLabelElement>
+type FieldLabelProps = LabelHTMLAttributes<HTMLLabelElement>
 
 type FieldErrorProps = {
   errors?: Array<{ message?: string } | undefined>

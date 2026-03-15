@@ -1,6 +1,7 @@
 "use server"
 
 import { Prisma } from "@/generated/prisma/client"
+import { ROLES } from "@/generated/prisma/enums"
 import { prisma } from "@/lib/prisma"
 import { createClient } from "@/lib/supabase/server"
 import { signUpSchema, type signUpSchemaInput } from "@/schemas/sign-up"
@@ -23,6 +24,11 @@ export async function signUp(
   const { data: auth, error: authError } = await supabase.auth.signUp({
     email: data.email,
     password: data.password,
+    options: {
+      data: {
+        role: data.role.toLowerCase(),
+      },
+    },
   })
 
   if (authError) {
@@ -33,17 +39,29 @@ export async function signUp(
     return { ok: false, error: "auth.user is not defined" }
   }
 
+  const authUserId = auth.user.id
+
   // prisma
 
   try {
-    await prisma.user.create({
-      data: {
-        id: auth.user.id,
-        email: data.email,
-        firstName: data.firstName,
-        lastName: data.lastName,
-        role: data.role,
-      },
+    await prisma.$transaction(async (tx) => {
+      await tx.user.create({
+        data: {
+          id: authUserId,
+          email: data.email,
+          firstName: data.firstName,
+          lastName: data.lastName,
+          role: data.role,
+        },
+      })
+
+      if (data.role === ROLES.DOCTOR) {
+        await tx.doctor.create({
+          data: {
+            userId: authUserId,
+          },
+        })
+      }
     })
   } catch (e) {
     if (

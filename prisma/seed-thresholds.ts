@@ -21,7 +21,7 @@
 //
 // Sources documented per condition below.
 
-import type { SourceQuality } from "../generated/prisma/client";
+import type { SourceQuality } from "../src/generated/prisma/client";
 
 export type ThresholdEntry = {
   /** Condition shortCode (must match seed.ts conditions) */
