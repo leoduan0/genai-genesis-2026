@@ -1,6 +1,6 @@
 export const SCREENING_CONFIG = {
   // Stage 1 termination
-  eigenvalueRatioThreshold: 5,
+  eigenvalueRatioThreshold: 15,
   minVarianceReductionFraction: 0.05,
   maxStageOneItems: 20,
 

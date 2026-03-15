@@ -152,7 +152,7 @@ export async function placeholderScreeningLLM(
   const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
   const toolCalls: ToolCall[] = [];
 
-  if (lastUserMessage && screeningState.itemsAdministered.length > 0) {
+  if (lastUserMessage) {
     // Find the last administered item to score
     // (In placeholder mode, we assume the user is responding to whatever was last asked)
     // The route handler tracks which item is pending; we parse the score here.

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSession } from "@/lib/screening/persistence";
+import { createClient } from "@/lib/supabase/server";
+import { prisma } from "@/lib/prisma";
 import type { PopulationType } from "@/generated/prisma/enums";
 
 const VALID_POPULATION_TYPES: PopulationType[] = [
@@ -12,23 +14,30 @@ const VALID_POPULATION_TYPES: PopulationType[] = [
 /**
  * POST /api/screening/start
  *
- * Create a new screening session. Loads reference data, initializes priors,
- * and persists the session to DB.
+ * Create a new screening session. Resolves patient from auth,
+ * loads reference data, initializes priors, and persists to DB.
  *
- * Body: { patientId: string, populationType?: PopulationType }
+ * Body: { populationType?: PopulationType }
  * Returns: { sessionId, stage, spectrumCount, conditionCount }
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { patientId, populationType = "GENERAL" } = body;
-
-    if (!patientId || typeof patientId !== "string") {
-      return NextResponse.json(
-        { error: "patientId is required" },
-        { status: 400 },
-      );
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const patient = await prisma.patient.findUnique({
+      where: { userId: user.id },
+      select: { id: true },
+    });
+    if (!patient) {
+      return NextResponse.json({ error: "Patient profile not found" }, { status: 404 });
+    }
+
+    const body = await request.json();
+    const { populationType = "GENERAL" } = body;
 
     if (!VALID_POPULATION_TYPES.includes(populationType)) {
       return NextResponse.json(
@@ -38,7 +47,7 @@ export async function POST(request: NextRequest) {
     }
 
     const { sessionId, state, referenceData } = await createSession(
-      patientId,
+      patient.id,
       populationType,
     );
 

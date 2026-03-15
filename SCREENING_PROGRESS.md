@@ -19,18 +19,18 @@ Tracks implementation of the Bayesian adaptive screening flow. See `SCREENING_PL
 
 ## Step 3: LLM Integration (`src/lib/screening/llm/`)
 
-- [ ] **3a** LLM client (`client.ts`) — placeholder wrapper, same interface as real LLM
-- [ ] **3b** General screening function (`screening.ts`) — one function, editable prompt, tools (score_item, select_item, ask_clarification, frame_question, interpret_response, flag_implied_scores)
-- [ ] **3c** Report generation (`report.ts`) — separate editable prompt, structured output
-- [ ] **3d** Placeholder behavior — verbatim items, direct scoring, template report
+- [x] **3a** LLM client (`client.ts`) — `callScreeningLLM()`, `callReportLLM()` wrappers delegating to placeholder impls
+- [x] **3b** General screening function (`screening.ts`) — editable `SCREENING_SYSTEM_PROMPT`, `SCREENING_TOOLS` definitions, `placeholderScreeningLLM()`
+- [x] **3c** Report generation (`report.ts`) — editable `REPORT_SYSTEM_PROMPT`, `placeholderReportLLM()` with template sections
+- [x] **3d** Placeholder behavior — verbatim items, direct numeric scoring, template-filled report; swap is one-line change in `client.ts`
 
 ## Step 4: API Routes (`src/app/api/screening/`)
 
-- [ ] **4a** `POST /start`, `GET /[id]`, `POST /[id]/end`
-- [ ] **4b** `POST /[id]/intake` — free-text processing
-- [ ] **4c** `POST /[id]/respond` — main screening loop
-- [ ] **4d** `GET /[id]/report`
-- [ ] **4e** `POST /[id]/followup`
+- [x] **4a** `POST /start`, `GET /[id]`, `POST /[id]/end` — `start/route.ts`, `[sessionId]/route.ts`
+- [x] **4b** `POST /[id]/intake` — free-text processing, auto-scoring, transition to BROAD_SCREENING
+- [x] **4c** `POST /[id]/respond` — main screening loop: LLM → Kalman → termination check → next question
+- [x] **4d** `GET /[id]/report` — diagnostic profile + LLM report generation + diagnosis persistence
+- [x] **4e** `POST /[id]/followup` — Q&A with report context
 
 ## Step 5: Database Session Persistence
 
@@ -39,10 +39,10 @@ Tracks implementation of the Bayesian adaptive screening flow. See `SCREENING_PL
 
 ## Step 6: Patient Screening UI (`/patient/screening/`)
 
-- [ ] **6a** Entry point — begin screening, population selector, past screenings
-- [ ] **6b** Phase 0: Free-text intake — textarea, loading state, transition screen
-- [ ] **6c** Phase 1 & 2: Conversational chat — message thread, progress bar, sidebar
-- [ ] **6d** Phase 3: Report — dimensional profile, flagged conditions, talking points, not-assessed
+- [x] **6a** Entry point — population selector, begin button — `screening/page.tsx`
+- [x] **6b** Phase 0: Free-text intake — textarea, loading spinner, transition screen — `screening/intake/page.tsx`
+- [x] **6c** Phase 1 & 2: Chat — vertical chat, Likert/MCQ items, Q:/A: compression, progress bar — `screening/chat/page.tsx` + `components/screening/`
+- [x] **6d** Phase 3: Report — dimensional profile, flagged conditions, talking points, not-assessed — `screening/report/page.tsx`
 - [ ] **6e** Phase 4: Follow-up — Q&A chat about the report
 
 ## Step 7: Doctor Review UI
